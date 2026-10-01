@@ -420,6 +420,7 @@ Two more results are recorded but don't decide the gate:
 
 - **Buffer around the averages** at 0%, 1% and 2%. A buffer is adopted only if it improves the result in all three periods; otherwise it stays at 0. Result: 1% and 2% each raise the full-period return (12.63% and 12.96%) but worsen at least one period, so the buffer stays at 0.
 - **Tax sensitivity** at 0%, 20% and 30%, so the size of the tax drag is known before your rate is settled. Result: 10.20% against SPY's 8.02% at 20%, and 9.10% against 7.57% at 30%, both valued as if sold at the end.
+- **Trading at the next close instead of the next open**, because about 10 of the 27 years use modelled UCITS prices from before DBPG, LQQ and SXRM listed (2009–10), and their modelled open is 2× SPY's opening gap, not the real 09:00 open. Result: the gate passes either way, 12.08% against SPY's 8.80% at the next close with a −26.5% worst drop. In 1999–2007 the next open scores lower (0.26 against 0.34), so the modelled open doesn't flatter the result.
 
 If it fails:
 
