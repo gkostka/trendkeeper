@@ -13,7 +13,7 @@ RESEARCH_TICKERS = ["SPY", "QQQ", "^NDX", "^IRX", "SSO", "QLD", "VFITX"]
 UCITS_TICKERS = ["DBPG.DE", "LQQ.PA", "SXRM.DE"]
 ECB = "https://data-api.ecb.europa.eu/service/data/{}?format=csvdata&startPeriod={}"
 NASDAQ = "https://api.nasdaq.com/api/quote/{}/historical?assetclass=etf&fromdate={}&limit=10"
-ECB_SERIES = {"EURUSD": "EXR/D.USD.EUR.SP00.A", "^DFR": "FM/D.U2.EUR.4F.KR.DFR.LEV"}
+ECB_SERIES = {"EURUSD": "EXR/D.USD.EUR.SP00.A", "EURPLN": "EXR/D.PLN.EUR.SP00.A", "^DFR": "FM/D.U2.EUR.4F.KR.DFR.LEV"}
 
 
 def download(tickers, start="1990-01-01", end=None) -> pd.DataFrame:
@@ -37,8 +37,9 @@ def download_ecb(names=tuple(ECB_SERIES), start="1999-01-01", end=None) -> pd.Da
 
 
 def needed(cfg: Config) -> set[str]:
-    """Every price, rate and FX series the config's instruments read."""
-    out = set()
+    """Every price, rate and FX series the config's instruments and report currencies read."""
+    out = {FX.get((c, cfg.base_currency)) or FX[(cfg.base_currency, c)]
+           for c in cfg.report_currencies if c != cfg.base_currency}
     for i in cfg.instruments.values():
         if i.rate:
             out.add(RATES[i.rate])

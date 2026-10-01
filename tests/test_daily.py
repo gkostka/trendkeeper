@@ -54,11 +54,24 @@ def test_a_run_logs_the_day_writes_the_status_and_pings(tmp_path):
     code, outbox, pings = run(tmp_path)
     assert code == 0 and pings == [""]
     status = (tmp_path / "status.txt").read_text()
-    assert "US close 2026-09-30" in status and "mix_30_30_40" in status and "Paper action (mix_30_30_40)" in status
+    assert "Strategy: Mix 30/30/40 (" in status and "30-09-2026 Wednesday" in status and "Actions needed" in status and "Treasuries" in status
     db = store.connect(tmp_path / "tk.db")
     logged = {s: store.decisions(db, s, 1)[0] for s in ("mix_30_30_40", "spy", "qqq")}
     assert all(d["day"] == "2026-09-30" and d["held_back"] is None for d in logged.values())
-    assert [ch for ch, subject, _ in outbox.sent if subject.startswith("Trendkeeper 2026")] == ["slack"]
+    daily_sent = [(ch, text) for ch, subject, text in outbox.sent if subject == "Mix 30/30/40 · 30-09-2026"]
+    assert [ch for ch, _ in daily_sent] == ["slack"]
+    tables = [b for b in daily_sent[0][1]["blocks"] if b["type"] == "table"]
+    assert len(tables) == 7  # strategy, portfolio, performance, three backtests, action
+    # Slack rejects the whole message over one zero-length cell.
+    assert all(c["elements"][0]["elements"][0]["text"] for t in tables for r in t["rows"] for c in r)
+    assert "Paper portfolio" not in status
+
+
+def test_the_email_has_the_tables_as_html_and_the_text_as_its_plain_part(tmp_path):
+    _, outbox, _ = run(tmp_path, Outbox(failing={"slack"}))
+    mail = [text for ch, subject, text in outbox.sent if ch == "email" and subject == "Mix 30/30/40 · 30-09-2026"]
+    assert len(mail) == 1 and mail[0]["html"].count("<table") == 7
+    assert mail[0]["text"].startswith("Strategy: Mix 30/30/40 (") and "Strategy:" in mail[0]["text"]
 
 
 def test_running_twice_logs_once_and_does_not_repeat_alerts(tmp_path):
@@ -73,9 +86,9 @@ def test_closes_that_disagree_hold_back_the_advice_and_alert(tmp_path):
     _, outbox, _ = run(tmp_path, second=lambda t: second_close(t, 0.01))
     d = store.decisions(store.connect(tmp_path / "tk.db"), "mix_30_30_40", 1)[0]
     assert d["held_back"] and d["advice"] == []
-    assert any(s == "Trendkeeper alert: cross-check:SPY" for _, s, _ in outbox.sent)
+    assert any(s == daily.alert_subject("cross-check:SPY") for _, s, _ in outbox.sent)
     _, outbox, _ = run(tmp_path, now=LATER)  # sources agree again: the alert clears, once
-    assert any(s == "Trendkeeper cleared: cross-check:SPY" for _, s, _ in outbox.sent)
+    assert any(s == daily.alert_subject("cross-check:SPY", cleared=True) for _, s, _ in outbox.sent)
     # The log keeps both runs, and the latest says what was advised in the end.
     both = store.decisions(store.connect(tmp_path / "tk.db"), "mix_30_30_40")
     assert [bool(d["held_back"]) for d in both] == [False, True] and both[0]["advice"]
@@ -88,7 +101,8 @@ def test_a_late_run_says_so(tmp_path):
 
 def test_a_failed_channel_falls_back_and_is_reported(tmp_path):
     _, outbox, _ = run(tmp_path, Outbox(failing={"slack"}))
-    assert [ch for ch, s, _ in outbox.sent if s.startswith("Trendkeeper 2026")] == ["email"]
+    daily_sent = [(ch, text) for ch, s, text in outbox.sent if s.startswith("Mix 30/30/40 · ")]
+    assert [ch for ch, _ in daily_sent] == ["email"] and "```" not in daily_sent[0][1]  # plain text, not Slack's
     assert "notify" in store.open_alerts(store.connect(tmp_path / "tk.db"))
 
 
@@ -100,7 +114,7 @@ def test_a_crash_writes_the_failure_and_pings_fail(tmp_path):
         daily.run(CONFIG, now=EVENING, fetch=broken, second_close=second_close, senders=outbox.senders,
                   pinger=lambda suffix="": pings.append(suffix), data_root=tmp_path)
     assert pings == ["/fail"] and "FAILED" in (tmp_path / "status.txt").read_text()
-    assert any(s == "Trendkeeper run failed" for _, s, _ in outbox.sent)
+    assert any(s == "❌ Trendkeeper: the daily run failed" for _, s, _ in outbox.sent)
 
 
 def test_overrides_replace_a_bad_price(tmp_path):
@@ -126,7 +140,7 @@ def test_next_xetra_open_skips_weekends_and_holidays():
 def test_tk_prints_the_status_and_why(tmp_path, monkeypatch, capsys):
     run(tmp_path)
     monkeypatch.setenv("TK_DATA_DIR", str(tmp_path))
-    assert cli.main([]) == 0 and "US close 2026-09-30" in capsys.readouterr().out
+    assert cli.main([]) == 0 and "30-09-2026 Wednesday" in capsys.readouterr().out
     assert cli.main(["why"]) == 0 and "200-day average" in capsys.readouterr().out
 
 
@@ -253,3 +267,31 @@ def test_an_empty_holiday_list_raises_an_alert():
     assert daily.holiday_alert(holidays, pd.Timestamp("2026-10-01").date()) is None
     assert "2027" in daily.holiday_alert(holidays, pd.Timestamp("2026-12-01").date())
     assert "no day ahead" in daily.holiday_alert(holidays, pd.Timestamp("2027-01-04").date())
+
+
+def test_a_channel_that_stays_down_does_not_clear_and_reopen_each_run(tmp_path):
+    down = Outbox(failing={"slack"})
+    run(tmp_path, down)
+    run(tmp_path, down, now=LATER)
+    notices = [s for _, s, _ in down.sent if "Messages failed" in s]
+    assert notices == [daily.alert_subject("notify")]  # once, by email; never cleared while Slack is down
+    up = Outbox()
+    run(tmp_path, up, now=datetime(2026, 9, 30, 20, 0, tzinfo=daily.NY))
+    assert [s for _, s, _ in up.sent if "Messages failed" in s] == [daily.alert_subject("notify", cleared=True)] * 2
+
+
+def test_a_new_portfolio_starts_in_cash_and_is_told_to_buy_every_fund(tmp_path):
+    run(tmp_path)
+    d = store.decisions(store.connect(tmp_path / "tk.db"), "mix_30_30_40", 1)[0]
+    assert all(s["shares"] == 0 for s in d["slices"])
+    assert sorted(a["fund"] for a in d["advice"]) == ["DBPG.DE", "LQQ.PA", "SXRM.DE"]
+
+
+def test_trailing_measures_a_year_and_need_the_history():
+    days = pd.bdate_range("2014-01-01", "2026-09-30")
+    values = pd.Series(1.1 ** ((days - days[0]).days / 365.25), index=days)
+    values[(values.index >= "2020-03-02") & (values.index < "2020-04-01")] *= 0.8  # a 20% dip for a month
+    got = daily.trailing(values, days[-1], years=(1, 10, 25))
+    assert got["return"][1] == pytest.approx(0.1, abs=1e-3) and got["return"][10] == pytest.approx(0.1, abs=1e-3)
+    assert got["drawdown"][1] == pytest.approx(0) and got["drawdown"][10] == pytest.approx(-0.2, abs=1e-3)
+    assert got["sharpe"][10] > 0 and got["return"][25] is None and got["sharpe"][25] is None

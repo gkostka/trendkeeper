@@ -52,7 +52,7 @@ def why(strategy_id: str | None) -> int:
     if d["held_back"]:
         print(f"  Held back: {d['held_back']}")
     for a in d["advice"]:
-        print(f"  Paper action: {daily.describe(a, cfg.base_currency)}, at the open on {d['trade_at']}")
+        print(f"  Paper action: {daily.describe(a, cfg)}, at the open on {d['trade_at']}")
     print("  Closes used (each in its own currency): " + ", ".join(f"{k} {v:,.4g}" for k, v in sorted(d["prices"].items())))
     return 0
 

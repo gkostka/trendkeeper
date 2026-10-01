@@ -9,6 +9,7 @@ min_trade = 0.02           # skip rebalance trades under 2% of the portfolio
 whole_shares = true
 start_value = 30000        # placeholder: your planned portfolio size (open question)
 cash = "EUR_CASH"
+report_currencies = ["EUR", "USD", "PLN"]   # performance is shown in each
 start = 2026-10-01         # "since start" results and the daily advice begin here
 data_dir = "/var/lib/trendkeeper"   # database, transactions, overrides, status; outside the repo
 xetra_holidays = [         # weekdays Xetra is shut (Deutsche Börse); add the next year each December.
@@ -33,9 +34,11 @@ free = 10000               # nothing on roughly the first 10,000
 full_rate_nav = 100000     # below this account size the rate scales down in proportion
 
 [instrument.SPY]           # signal for the S&P slice, and the benchmark
+name = "S&P 500 (SPY)"
 currency = "USD"
 
 [instrument.QQQ]           # signal for the Nasdaq slice, and a benchmark
+name = "Nasdaq-100 (QQQ)"
 currency = "USD"
 backfill = "^NDX"
 
@@ -43,6 +46,7 @@ backfill = "^NDX"
 currency = "USD"
 
 [instrument."DBPG.DE"]     # Xtrackers S&P 500 2x, EUR on Xetra
+name = "S&P 500 2x"
 currency = "EUR"
 tracks = "SPY"
 leverage = 2
@@ -50,6 +54,7 @@ cost = 0.0094              # yearly, applied daily; bot.calibrate on DBPG itself
 financing = "tbill"
 
 [instrument."LQQ.PA"]      # Amundi Nasdaq-100 2x, EUR in Paris
+name = "Nasdaq-100 2x"
 currency = "EUR"
 tracks = "QQQ"
 leverage = 2
@@ -57,12 +62,14 @@ cost = 0.0139              # bot.calibrate on LQQ itself: 1.39% from listing, 1.
 financing = "tbill"
 
 [instrument."SXRM.DE"]     # iShares $ Treasury 7-10yr, USD line on Xetra (hedged IBB1: open question)
+name = "Treasuries 7-10y"
 currency = "USD"
 backfill = "VFITX"
 
 [[strategy]]
 id = "mix_30_30_40"        # never edit the rules of an id in use; add a new id instead
 name = "Mix 30/30/40"
+description = "2x S&P 500 and 2x Nasdaq-100, each held while above its 200/250/300-day averages; 40% Treasuries; rebalanced monthly."
 rebalance = "monthly"
 tax_rate = 0.0             # placeholder: your rate on realized gains (open question)
 
@@ -87,7 +94,8 @@ tax_rate = 0.0             # placeholder: your rate on realized gains (open ques
 
 [[strategy]]
 id = "spy"
-name = "S&P 500 buy-and-hold"
+name = "S&P 500"
+description = "Buy and hold the S&P 500."
 benchmark = true
 tax_rate = 0.0             # same rate as the strategies it is compared with
 
@@ -98,7 +106,8 @@ tax_rate = 0.0             # same rate as the strategies it is compared with
 
 [[strategy]]
 id = "qqq"
-name = "Nasdaq-100 buy-and-hold"
+name = "Nasdaq-100"
+description = "Buy and hold the Nasdaq-100."
 benchmark = true
 tax_rate = 0.0
 

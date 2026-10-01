@@ -6,12 +6,13 @@ from pathlib import Path
 
 EXECUTIONS = ("same_close", "next_open", "next_close")
 RATES = {"tbill": "^IRX", "ecb_dfr": "^DFR"}
-FX = {("USD", "EUR"): "EURUSD"}  # column holds units of the first currency per one of the second
+FX = {("USD", "EUR"): "EURUSD", ("PLN", "EUR"): "EURPLN"}  # column holds units of the first currency per one of the second
 
 
 @dataclass(frozen=True)
 class Instrument:
     id: str
+    name: str | None = None
     currency: str = "USD"
     tracks: str | None = None
     leverage: float = 1.0
@@ -42,6 +43,7 @@ class Strategy:
     tax_rate: float
     rebalance: str | None = None
     benchmark: bool = False
+    description: str | None = None
 
 
 CHANNELS = ("slack", "email")
@@ -80,6 +82,7 @@ class Config:
     fx_cost: float = 0.0
     fx_min: float = 0.0
     follow: str | None = None
+    report_currencies: tuple[str, ...] = ()
     start: date | None = None
     data_dir: str = "/var/lib/trendkeeper"
     xetra_holidays: tuple[date, ...] = ()
@@ -118,6 +121,8 @@ def loads(text: str) -> Config:
     if "notify" in raw:
         n = raw.pop("notify")
         raw["notify"] = _make(Notify, "notify", **{k: tuple(v) if isinstance(v, list) else v for k, v in n.items()})
+    if "report_currencies" in raw:
+        raw["report_currencies"] = tuple(raw["report_currencies"])
     if "xetra_holidays" in raw:
         raw["xetra_holidays"] = tuple(raw["xetra_holidays"])
     known = {f.name for f in fields(Config)} - {"instruments", "strategies"}
@@ -133,6 +138,10 @@ def check(cfg: Config) -> None:
         raise ConfigError(f"execution must be one of {EXECUTIONS}, not {cfg.execution!r}")
     if cfg.follow is not None and cfg.follow not in cfg.strategies:
         raise ConfigError(f"follow: no strategy {cfg.follow!r}")
+    pairs = {frozenset(k) for k in FX}
+    for c in cfg.report_currencies:
+        if c != cfg.base_currency and frozenset((c, cfg.base_currency)) not in pairs:
+            raise ConfigError(f"report_currencies: no exchange rate between {c} and {cfg.base_currency}")
     n = cfg.notify
     for kind in ("alerts", "daily", "weekly"):
         if bad := sorted(set(getattr(n, kind)) - set(CHANNELS)):

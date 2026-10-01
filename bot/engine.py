@@ -6,7 +6,7 @@ import pandas as pd
 
 from bot.config import FX, RATES, Config, Instrument, Strategy
 
-CALENDAR_DAY_SERIES = {"^DFR", "EURUSD"}
+CALENDAR_DAY_SERIES = {"^DFR", "EURUSD", "EURPLN"}
 # A day a fund moves this much more or less than its model can't be explained by the European close
 # coming 4.5 hours early (2x of SPY's worst intraday swing is well inside it): it's a split or a bad print.
 MAX_GAP = 0.20
@@ -274,13 +274,16 @@ def _cash_rate(bench: float, cash: float, nav: float, rules: Rules) -> float:
     return rate * paid_share * scale
 
 
-def start_state(strategy: Strategy, market: Market, day, value: float, rules: Rules) -> State:
+def start_state(strategy: Strategy, market: Market, day, value: float, rules: Rules, invest_holds: bool = True) -> State:
+    """All cash, with the held funds bought at once for free (a backtest), or left in cash for the first step
+    to buy like any trade (a real portfolio starting today)."""
     i = market.pos(day)
     state = State(day=market.dates[i], slices=tuple(
-        SliceState(fund=0.0, cash=sl.weight * value, held=1.0 if sl.rule == "hold" else 0.0) for sl in strategy.slices))
+        SliceState(fund=0.0, cash=sl.weight * value, held=1.0 if sl.rule == "hold" and invest_holds else 0.0)
+        for sl in strategy.slices))
     slices = list(state.slices)
     for k, sl in enumerate(strategy.slices):
-        if sl.rule == "hold":
+        if sl.rule == "hold" and invest_holds:
             p = market.price[sl.fund][i]
             slices[k] = _trade(slices[k], slices[k].cash, p, replace(rules, cost=0.0), 0.0, 0.0,
                                available=slices[k].cash, quote=p * market.scale[sl.fund][i])[0]
@@ -354,15 +357,14 @@ def step(strategy: Strategy, state: State, market: Market, day, rules: Rules):
                 rebalance(close_price, i, day, "close")
 
     for k, sl in enumerate(strategy.slices):
-        if sl.rule == "trend":
-            s = slices[k]
-            frac = market.above(sl.signal, sl.windows, sl.buffer)[i]
-            if frac != (s.held if s.pending is None else s.pending):
-                if rules.execution == "same_close":
-                    trade(k, frac * s.value - s.fund, close_price(k), i, day, "close", "signal")
-                    slices[k] = replace(slices[k], held=frac)
-                else:
-                    slices[k] = replace(s, pending=frac)
+        s = slices[k]
+        frac = market.above(sl.signal, sl.windows, sl.buffer)[i] if sl.rule == "trend" else 1.0
+        if frac != (s.held if s.pending is None else s.pending):
+            if rules.execution == "same_close":
+                trade(k, frac * s.value - s.fund, close_price(k), i, day, "close", "signal")
+                slices[k] = replace(slices[k], held=frac)
+            else:
+                slices[k] = replace(s, pending=frac)
 
     return State(day=day, slices=tuple(slices), loss_carry=carry, tax_paid=paid), trades
 
@@ -376,7 +378,8 @@ def after_tax_value(strategy: Strategy, state: State, market: Market, rules: Rul
     return state.value - fees - tax
 
 
-def backtest(strategy: Strategy, market: Market, rules: Rules, start=None, end=None, value=1.0, liquidate=True):
+def backtest(strategy: Strategy, market: Market, rules: Rules, start=None, end=None, value=1.0, liquidate=True,
+             invest_holds=True):
     """Daily values over [start, end). With `liquidate`, the last value is after selling everything and paying tax,
     so a buy-and-hold that never sells is compared on the same footing as a strategy that trades."""
     if rules.whole_shares and (missing := {sl.fund for sl in strategy.slices} - market.priced):
@@ -390,7 +393,7 @@ def backtest(strategy: Strategy, market: Market, rules: Rules, start=None, end=N
     dates = dates[(dates >= start) & (dates < (end or dates[-1] + pd.Timedelta(days=1)))]
     if late := {f: f"{d:%Y-%m-%d}" for f, d in starts.items() if d > dates[min(1, len(dates) - 1)]}:
         raise ValueError(f"no data at the start {dates[0]:%Y-%m-%d} for {late}")
-    state = start_state(strategy, market, dates[0], value, rules)
+    state = start_state(strategy, market, dates[0], value, rules, invest_holds)
     values, trades = [state.value], []
     for day in dates[1:]:
         state, t = step(strategy, state, market, day, rules)

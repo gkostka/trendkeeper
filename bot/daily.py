@@ -13,6 +13,7 @@ import sys
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from html import escape
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -36,6 +37,8 @@ class Run:
     held_back: str | None = None
     decisions: dict[str, dict] = field(default_factory=dict)
     closes: dict[str, float] = field(default_factory=dict)
+    fx: dict[str, pd.Series] = field(default_factory=dict)  # units of each report currency per base unit
+    track: dict[str, dict] = field(default_factory=dict)  # backtest return a year in USD, by strategy and years
 
 
 def git_commit() -> str:
@@ -92,8 +95,11 @@ def update_prices(db, cfg, fetch, upto: pd.Timestamp) -> pd.DataFrame:
         return px[px.index <= upto]
 
     last = store.last_price_day(db, "SPY.close")
-    fresh = get("1990-01-01" if last is None else f"{last - pd.Timedelta(days=REFETCH_DAYS):%Y-%m-%d}")
-    if last is not None and revised(store.load_prices(db), fresh, last):
+    cached = store.load_prices(db)
+    # A series the cache has never had (a new report currency, say) needs its whole history.
+    new = {f"{s}.close" for s in data.needed(cfg)} - set(cached.columns)
+    fresh = get("1990-01-01" if last is None or new else f"{last - pd.Timedelta(days=REFETCH_DAYS):%Y-%m-%d}")
+    if last is not None and not new and revised(cached, fresh, last):
         fresh = get("1990-01-01")
     store.save_prices(db, fresh)
     px = store.load_prices(db)
@@ -137,17 +143,18 @@ def check_data(run: Run, cfg, px, market, second_close) -> None:
 
 def _advice(fund, amount, quote, reason, **extra) -> dict:
     return {"fund": fund, "action": "buy" if amount > 0 else "sell", "amount": round(abs(amount), 2),
-            "shares": int(abs(amount) // quote), "reason": reason, **extra}
+            "shares": round(abs(amount) / quote, 2), "reason": reason, **extra}
 
 
 def rebalance_advice(strategy, state, market, i, rules) -> list[dict]:
     """The trades the coming monthly rebalance makes, estimated at today's close, as the engine makes them: each
     slice back to its weight once the pending signal trades are done, sells first, buys no larger than the cash
     on hand, and trades under min_trade skipped."""
-    total, amounts = state.value, []
+    total, amounts, after = state.value, [], {}
     cash = sum(s.cash for s in state.slices)
     for sl, s in zip(strategy.slices, state.slices):
         invested = s.held if s.pending is None else s.pending
+        after[sl.fund] = invested * sl.weight
         fund = s.fund if s.pending is None else s.pending * s.value
         cash -= fund - s.fund
         amounts.append((invested * sl.weight * total - fund, sl.fund))
@@ -155,16 +162,21 @@ def rebalance_advice(strategy, state, market, i, rules) -> list[dict]:
     for amount, fund in sorted(amounts):
         amount = min(amount, cash)
         if abs(amount) >= max(rules.min_trade * total, 1e-9 * total):
-            out.append(_advice(fund, amount, market.price[fund][i] * market.scale[fund][i], "rebalance"))
+            out.append(_advice(fund, amount, market.price[fund][i] * market.scale[fund][i], "rebalance",
+                               after=after[fund]))
             cash -= amount
     return out
 
 
-def describe(a: dict, currency: str) -> str:
-    text = f"{a['action']} about {a['amount']:,.0f} {currency} of {a['fund']} (~{a['shares']} shares)"
-    if a["reason"] == "rebalance":
-        return text + ", monthly rebalance"
-    return text + f", {a['from']:.0%} to {a['to']:.0%} invested"
+def money(x: float, currency: str) -> str:
+    return f"€{x:,.0f}" if currency == "EUR" else f"{x:,.0f} {currency}"
+
+
+def describe(a: dict, cfg) -> str:
+    """One advised trade as a sentence: "Buy about 28 shares of Xtrackers S&P 500 2x (DBPG), about €9,000"."""
+    text = (f"{a['action'].capitalize()} about {a['shares']:,} shares of {name_of(cfg, a['fund'])}, "
+            f"about {money(a['amount'], cfg.base_currency)}")
+    return text + (" (monthly rebalance)" if a["reason"] == "rebalance" else "")
 
 
 def signal_view(market, sl, i) -> dict:
@@ -177,12 +189,26 @@ def signal_view(market, sl, i) -> dict:
             "windows": windows}
 
 
+def since_in(run: Run, cfg, values: pd.Series) -> dict:
+    """The return since the start measured in each report currency; None where the rate is missing."""
+    out = {}
+    for c in cfg.report_currencies or (cfg.base_currency,):
+        growth = values.iloc[-1] / values.iloc[0]
+        if c != cfg.base_currency:
+            rate = run.fx.get(c)
+            r0, r1 = (rate.asof(values.index[0]), rate.asof(values.index[-1])) if rate is not None else (None, None)
+            growth = growth * r1 / r0 if r0 and r1 and pd.notna(r0) and pd.notna(r1) else None
+        out[c] = None if growth is None else growth - 1
+    return out
+
+
 def decide(run: Run, cfg, market, strategy, rules) -> dict:
     i = market.pos(run.day)
     before_start = market.dates[market.dates < pd.Timestamp(cfg.start or run.day)]
     start = min(before_start[-1] if len(before_start) else market.dates[0], market.dates[i - 1])
-    values, _, state = engine.backtest(strategy, market, rules, start=start, end=run.day + pd.Timedelta(days=1),
-                                       value=cfg.start_value, liquidate=False)
+    # Starts in cash: the held funds are bought at the first open like any trade, since nothing is owned yet.
+    values, trades, state = engine.backtest(strategy, market, rules, start=start, end=run.day + pd.Timedelta(days=1),
+                                            value=cfg.start_value, liquidate=False, invest_holds=False)
     opens = next_xetra_open(run.day, set(cfg.xetra_holidays), run.now)
     advice = []
     if run.held_back is None:
@@ -190,16 +216,25 @@ def decide(run: Run, cfg, market, strategy, rules) -> dict:
             if s.pending is not None and s.pending != s.held:
                 quote = market.price[sl.fund][i] * market.scale[sl.fund][i]
                 advice.append(_advice(sl.fund, (s.pending - s.held) * s.value, quote, "signal",
-                                      **{"from": s.held, "to": s.pending}))
+                                      **{"from": s.held, "to": s.pending, "after": sl.weight * s.pending}))
         if strategy.rebalance == "monthly" and opens.month != run.day.month:
             advice += rebalance_advice(strategy, state, market, i, rules)
         advice.sort(key=lambda a: a["action"] != "sell")  # sells first, as the engine trades them
+    last = max((t.day for t in trades), default=None)
     return {
+        "name": strategy.name,
+        "since": f"{pd.Timestamp(cfg.start) if cfg.start else values.index[0]:%Y-%m-%d}",
+        "last_change": None if last is None else {
+            "day": f"{last:%Y-%m-%d}",
+            "trades": [{"fund": t.fund, "action": "bought" if t.amount > 0 else "sold", "reason": t.reason}
+                       for t in trades if t.day == last]},
         "value": state.value,
         "since_start": values.iloc[-1] / values.iloc[0] - 1,
+        "since_start_in": since_in(run, cfg, values),
         "drop_from_peak": values.iloc[-1] / values.max() - 1,
         "signals": [signal_view(market, sl, i) for sl in strategy.slices if sl.rule == "trend"],
-        "slices": [{"fund": sl.fund, "value": s.value, "invested": s.held, "pending": s.pending}
+        "slices": [{"fund": sl.fund, "value": s.value, "invested": s.held, "pending": s.pending, "weight": sl.weight,
+                    "holding": s.fund, "cash": s.cash, "shares": s.shares * market.scale[sl.fund][i]}
                    for sl, s in zip(strategy.slices, state.slices)],
         "advice": advice,
         "trade_at": f"{opens:%Y-%m-%d}",
@@ -208,38 +243,261 @@ def decide(run: Run, cfg, market, strategy, rules) -> dict:
     }
 
 
-def strategy_alerts(run: Run, cfg, market, strategy, rules, decision) -> None:
-    worst = engine.stats(engine.backtest(strategy, market, rules, value=cfg.start_value)[0],
-                         "1900-01-01", "2100-01-01")["max_dd"]
+def strategy_alerts(run: Run, strategy, history: pd.Series, decision) -> None:
+    worst = engine.stats(history, "1900-01-01", "2100-01-01")["max_dd"]
     if decision["drop_from_peak"] < 1.5 * worst:
         run.alerts[f"drawdown:{strategy.id}"] = (f"{strategy.id} is {decision['drop_from_peak']:.1%} below its peak, "
                                                  f"past 1.5x its backtest worst ({worst:.1%}): stop and review")
 
 
-def summary(run: Run, cfg) -> str:
-    lines = [f"Trendkeeper · US close {run.day:%Y-%m-%d} · run {run.now.astimezone(NY):%Y-%m-%d %H:%M} New York"]
-    follow = run.decisions.get(cfg.follow) or next(iter(run.decisions.values()))
-    for sig in follow["signals"]:
-        dists = "  ".join(f"{w['window']}d {w['distance']:+.1%}" for w in sig["windows"])
-        above = [w["distance"] for w in sig["windows"] if w["distance"] > 0]
-        exit_at = f"  next exit at about {-min(above) / (1 + min(above)):.1%}" if above else ""
-        near = [f"{w['window']}d" for w in sig["windows"] if abs(w["distance"]) < NEAR]
-        near_at = f"  near the {', '.join(near)}: a trade is likely soon" if near else ""
-        lines.append(f"{sig['signal']:<4} {dists}  {round(sig['count'] * len(sig['windows']))}/{len(sig['windows'])}"
-                     f"{exit_at}{near_at}")
+def per_base(cfg, px, currency: str) -> pd.Series | None:
+    """Units of `currency` per unit of the base currency, each day; None if the rate isn't in the data."""
+    col = config.FX.get((currency, cfg.base_currency)) or config.FX.get((cfg.base_currency, currency))
+    if col is None or f"{col}.close" not in px:
+        return None
+    rate = px[f"{col}.close"].dropna()
+    return rate if (currency, cfg.base_currency) in config.FX else 1 / rate
+
+
+BACKTEST_YEARS = (1, 3, 5, 10, 25)
+
+
+def trailing(values: pd.Series, day, rate: pd.Series | None = None, years=BACKTEST_YEARS) -> dict:
+    """Over the last 1 to 25 years to `day`: the return a year, the worst drop, and the Sharpe ratio (the
+    return over `rate`, a yearly risk-free rate, per unit of volatility, both a year). None where the history
+    is shorter."""
+    out = {"return": {}, "drawdown": {}, "sharpe": {}}
+    end = pd.Timestamp(day)
+    for y in years:
+        t0 = end - pd.DateOffset(years=y)
+        if t0 < values.index[0]:
+            for k in out:
+                out[k][y] = None
+            continue
+        v = values[(values.index >= values.index[values.index <= t0][-1]) & (values.index <= end)]
+        out["return"][y] = (v.iloc[-1] / v.iloc[0]) ** (1 / y) - 1
+        out["drawdown"][y] = float((v / v.cummax() - 1).min())
+        r = v.pct_change().dropna()
+        per_year = len(r) / y
+        free = (rate.reindex(r.index, method="ffill").fillna(0) / per_year) if rate is not None else 0.0
+        excess = r - free
+        out["sharpe"][y] = float(excess.mean() / r.std() * per_year ** 0.5) if r.std() > 0 else None
+    return out
+
+
+def _date(d) -> str:
+    return f"{pd.Timestamp(d):%d-%m-%Y}"
+
+
+ALERT_TITLES = {"stale": "Prices are out of date", "late": "The daily run was late", "backup": "The backup is overdue",
+                "holidays": "The Xetra holiday list needs next year's days", "notify": "Messages failed to send"}
+
+
+def alert_title(key: str) -> str:
+    kind, _, what = key.partition(":")
+    titled = {"cross-check": f"{what} price check", "repaired": f"{what} price replaced by its model",
+              "drawdown": f"{what} has fallen past its stop level"}
+    return titled.get(kind) or ALERT_TITLES.get(key, key)
+
+
+def alert_subject(key: str, cleared: bool = False) -> str:
+    return f"✅ Trendkeeper: {alert_title(key)}, resolved" if cleared else f"⚠️ Trendkeeper: {alert_title(key)}"
+
+
+def name_of(cfg, fund: str) -> str:
+    return cfg.instruments[fund].name or fund
+
+
+@dataclass
+class Table:
+    """Rows of text under headers, rendered as aligned text, a Slack table block or an HTML table. `align` is
+    "left" or "right" per column."""
+    headers: list[str]
+    align: list[str]
+    rows: list[list[str]]
+
+    def text(self) -> list[str]:
+        cells = [self.headers] + self.rows
+        width = [max(len(r[c]) for r in cells) for c in range(len(self.headers))]
+        return ["  ".join(c.ljust(w) if a == "left" else c.rjust(w) for c, w, a in zip(r, width, self.align)).rstrip()
+                for r in cells]
+
+    def slack(self) -> dict:
+        # Slack rejects the whole message over a zero-length cell.
+        def cell(t, bold=False):
+            return {"type": "rich_text", "elements": [{"type": "rich_text_section", "elements": [
+                {"type": "text", "text": t or "–", **({"style": {"bold": True}} if bold else {})}]}]}
+        return {"type": "table", "column_settings": [{"align": a} for a in self.align],
+                "rows": [[cell(h, bold=True) for h in self.headers]] + [[cell(c) for c in r] for r in self.rows]}
+
+    def html(self) -> str:
+        def row(cells, tag):
+            return "<tr>" + "".join(f'<{tag} style="text-align:{a};padding:2px 10px">{escape(c)}</{tag}>'
+                                    for c, a in zip(cells, self.align)) + "</tr>"
+        return ('<table style="border-collapse:collapse;font-family:sans-serif;font-size:14px">'
+                + row(self.headers, "th") + "".join(row(r, "td") for r in self.rows) + "</table>")
+
+
+def ticker(fund: str) -> str:
+    return fund.split(".")[0]
+
+
+def strategy_table(cfg, strategy) -> Table:
+    """One row per fund: its weight, and the share of the portfolio each of its averages decides."""
+    windows = sorted({w for sl in strategy.slices for w in sl.windows})
+    rows = [[name_of(cfg, sl.fund), ticker(sl.fund), f"{sl.weight:.0%}",
+             "/".join(f"{sl.weight / len(sl.windows):.0%}" for _ in sl.windows) if sl.rule == "trend" else "-"]
+            for sl in strategy.slices]
+    return Table(["Asset", "Ticker", "Weight", f"{'/'.join(map(str, windows))}d"], ["left", "left", "right", "right"], rows)
+
+
+def subject(run: Run, cfg) -> str:
+    sid = cfg.follow if cfg.follow in run.decisions else next(iter(run.decisions))
+    return f"{run.decisions[sid]['name']} · {_date(run.day)}"
+
+
+def holdings_table(cfg, f) -> Table:
+    """One row per fund: its ticker and currency, its target in the strategy now, its weight now, its value, and
+    its distance from each average (▲ above, ▼ below), then cash and the total."""
+    ccy, total = cfg.base_currency, f["value"]
+    trend = {g["fund"]: g for g in f["signals"]}
+    windows = [w["window"] for w in f["signals"][0]["windows"]] if f["signals"] else []
+    rows, targets = [], 0.0
+    for s in f["slices"]:
+        target = s["weight"] * (s["invested"] if s["pending"] is None else s["pending"])
+        targets += target
+        g = trend.get(s["fund"])
+        how = ["".join("▲" if w["distance"] > 0 else "▼" for w in g["windows"])] if g else [""]
+        dist = [f"{w['distance']:+.1%}" for w in g["windows"]] if g else [""] * len(windows)
+        rows.append([name_of(cfg, s["fund"]), ticker(s["fund"]), f"{s['shares']:,.2f}",
+                     f"{target:.0%}", f"{s['holding'] / total:.0%}", money(s["holding"], ccy), *how, *dist])
+    cash = sum(s["cash"] for s in f["slices"])
+    blank = [""] * (1 + len(windows))
+    rows.append(["Cash", ccy, "", f"{max(1 - targets, 0):.0%}", f"{cash / total:.0%}", money(cash, ccy), *blank])
+    rows.append(["Total", "", "", "", "", money(total, ccy), *blank])
+    return Table(["Asset", "Ticker", "Shares", "Target", "Now", "Value", "Trend", *[f"vs {w}d" for w in windows]],
+                 ["left", "left", "right", "right", "right", "right", "left", *["right"] * len(windows)], rows)
+
+
+def performance_table(run: Run, cfg, sid: str) -> Table:
+    """The followed strategy and the others since the start, in each report currency."""
+    first = run.decisions[sid]
+    currencies = list(cfg.report_currencies or (cfg.base_currency,))
+    rows = []
+    for d in [first] + [d for k, d in run.decisions.items() if k != sid]:
+        by = d.get("since_start_in") or {cfg.base_currency: d["since_start"]}
+        rows.append([d["name"], *[f"{by[c]:+.1%}" if by.get(c) is not None else "" for c in currencies]])
+    return Table(["Strategy", *currencies], ["left", *["right"] * len(currencies)], rows)
+
+
+BACKTEST_TABLES = (("return", "USD yearly returns", "{:+.1%}"), ("drawdown", "USD max drawdown", "{:.1%}"),
+                   ("sharpe", "Sharpe ratio (USD, over T-bills)", "{:.2f}"))
+
+
+def track_tables(run: Run, sid: str) -> list[tuple[str, Table]]:
+    """The backtest over the last 1 to 25 years, a table per measure: the followed strategy first."""
+    if sid not in run.track:
+        return []
+    order = [sid] + [k for k in run.track if k != sid]
+    out = []
+    for key, heading, fmt in BACKTEST_TABLES:
+        years = list(run.track[sid][key])
+        rows = [[run.decisions[k]["name"], *[fmt.format(x) if (x := run.track[k][key][y]) is not None else ""
+                                             for y in years]] for k in order]
+        out.append((heading, Table(["Strategy", *[f"{y}y" for y in years]], ["left", *["right"] * len(years)], rows)))
+    return out
+
+
+def action_table(cfg, f) -> Table:
+    """The advised trades: BUY or SELL, the ticker, about how many shares (fractional) and the amount."""
+    rows = [[a["action"].upper() + (" (rebalance)" if a["reason"] == "rebalance" else ""), ticker(a["fund"]),
+             f"{a['shares']:,.2f}", money(a["amount"], cfg.base_currency)] for a in f["advice"]]
+    return Table(["Action", "Ticker", "Shares", "Amount"], ["left", "left", "right", "right"], rows)
+
+
+def next_trade(cfg, f) -> str:
+    """The smallest move in each signal that would trade: "Next trade if S&P 500 falls about 6% (sell) ..."."""
+    moves, close = [], []
+    for g in f["signals"]:
+        name = name_of(cfg, g["signal"]).split(" (")[0]
+        dist = [w["distance"] for w in g["windows"]]
+        if above := [x for x in dist if x > 0]:
+            moves.append(f"{name} falls about {min(above) / (1 + min(above)):.0%} (sell)")
+        if below := [x for x in dist if x <= 0]:
+            moves.append(f"{name} rises about {-max(below) / (1 + max(below)):.0%} (buy)")
+        if any(abs(x) < NEAR for x in dist):
+            close.append(name)
+    line = "Next trade if " + " or ".join(moves) + "." if moves else ""
+    if close:
+        line += f" {' and '.join(close)} {'is' if len(close) == 1 else 'are'} close to an average: a trade may come soon."
+    return line
+
+
+def summary(run: Run, cfg) -> tuple[str, dict, str]:
+    """The daily summary as plain text (status.txt and the email's text part), a Slack Block Kit message and the
+    email's HTML part, in the same order: the strategy, the portfolio, performance since inception, the
+    backtest, the actions needed and the alerts."""
+    sid = cfg.follow if cfg.follow in run.decisions else next(iter(run.decisions))
+    f, ccy, strategy = run.decisions[sid], cfg.base_currency, cfg.strategies[sid]
+    rebalance = "Rebalanced monthly." if strategy.rebalance == "monthly" else ""
+    tables = {"strategy": strategy_table(cfg, strategy), "portfolio": holdings_table(cfg, f),
+              "performance": performance_table(run, cfg, sid), "action": action_table(cfg, f)}
+    since = f"Performance since portfolio inception: {_date(f['since'])}"
+    tracks = track_tables(run, sid)
+
+    n = len(f["advice"])
+    when = f"on {_date(f['trade_at'])}"
     if run.held_back:
-        lines.append(f"Paper action ({cfg.follow}): none today, held back because {run.held_back}")
-    elif not follow["advice"]:
-        lines.append(f"Paper action ({cfg.follow}): no change")
-    for a in follow["advice"]:
-        lines.append(f"Paper action ({cfg.follow}): {describe(a, cfg.base_currency)}, at the open on {follow['trade_at']}")
-    for sid, d in run.decisions.items():
-        lines.append(f"{sid:<14} since start {d['since_start']:+.1%}  from peak {d['drop_from_peak']:+.1%}  "
-                     f"value {d['value']:,.0f} {cfg.base_currency}")
-    lines.append("Paper actions trade the simulated portfolio, not your account; advice for your own holdings "
-                 "comes with milestone 3.")
-    lines.append("Alerts: " + ("none" if not run.alerts else "; ".join(f"{k}: {v}" for k, v in sorted(run.alerts.items()))))
-    return "\n".join(lines)
+        head = f"No action today: {run.held_back}, so the advice is held back. It runs again tomorrow."
+    elif not n:
+        head = f"No actions needed {when}"
+    else:
+        head = f"Actions needed {when}"
+    nxt = next_trade(cfg, f)
+    alerts = [f"{alert_title(k)}: {v}" for k, v in sorted(run.alerts.items())]
+    title = (f"Strategy: {f['name']} ("
+             + " / ".join(name_of(cfg, sl.fund) for sl in strategy.slices) + ")")
+    dated = f"{_date(run.day)} {run.day:%A}"
+
+    plain = "\n".join([
+        title, dated, "",
+        "Strategy:", *tables["strategy"].text(), *([rebalance] if rebalance else []), "",
+        "Portfolio:", *tables["portfolio"].text(), "",
+        since, *tables["performance"].text(), "",
+        *(["Backtests:"] + [line for h, tb in tracks for line in (f"{h}:", *tb.text(), "")] if tracks else []),
+        head + (":" if n else ""), *(tables["action"].text() if n else []), *([nxt] if nxt else []), "",
+        "No alerts." if not alerts else "Alerts:", *[f"  {a}" for a in alerts]])
+
+    def md(text):
+        return {"type": "section", "text": {"type": "mrkdwn", "text": text}}
+
+    def note(text):
+        return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
+
+    blocks = [{"type": "header", "text": {"type": "plain_text", "text": title}}, md(dated),
+              md("*Strategy*"), tables["strategy"].slack(), *([note(rebalance)] if rebalance else []),
+              md("*Portfolio*"), tables["portfolio"].slack(),
+              md(f"*{since}*"), tables["performance"].slack(),
+              *([md("*Backtests*")] + [b for h, tb in tracks for b in (md(f"_{h}_"), tb.slack())] if tracks else []),
+              md(f"*{head}*"), *([tables["action"].slack()] if n else []), *([note(nxt)] if nxt else []),
+              md("No alerts." if not alerts else "*Alerts*\n" + "\n".join(f"• {a}" for a in alerts))]
+    slack = {"text": subject(run, cfg), "blocks": blocks}
+
+    def p(text):
+        return f"<p>{escape(text)}</p>"
+
+    html = "".join([
+        f"<h3>{escape(title)}</h3>", p(dated),
+        "<p><b>Strategy</b></p>", tables["strategy"].html(), p(rebalance) if rebalance else "",
+        "<p><b>Portfolio</b></p>", tables["portfolio"].html(),
+        f"<p><b>{escape(since)}</b></p>", tables["performance"].html(),
+        "<p><b>Backtests</b></p>" + "".join(f"<p><i>{escape(h)}</i></p>{tb.html()}" for h, tb in tracks) if tracks else "",
+        f"<p><b>{escape(head)}</b></p>",
+        tables["action"].html() if n else "",
+        p(nxt) if nxt else "",
+        p("No alerts.") if not alerts else "<p><b>Alerts</b></p><ul>" + "".join(
+            f"<li>{escape(a)}</li>" for a in alerts) + "</ul>"])
+    return plain, slack, f'<html><body style="font-family:sans-serif">{html}</body></html>'
 
 
 def ping(suffix: str = "") -> None:
@@ -271,6 +529,9 @@ def run(cfg_file: Path | None = None, *, now: datetime | None = None, fetch=data
         market = engine.build_market(cfg, px)
         signals = {sl.signal for s in cfg.strategies.values() for sl in s.slices if sl.rule == "trend"}
         r = Run(day=min(px[f"{t}.close"].last_valid_index() for t in signals), now=now)
+        for c in set(cfg.report_currencies) | {"USD"}:
+            if c != cfg.base_currency and (rate := per_base(cfg, px, c)) is not None:
+                r.fx[c] = rate
         r.closes = {c[: -len('.close')]: float(v) for c, v in px.filter(like='.close').ffill().loc[r.day].items()
                     if c[: -len('.close')] in data.needed(cfg) and pd.notna(v)}
         check_data(r, cfg, px, market, second_close)
@@ -287,25 +548,45 @@ def run(cfg_file: Path | None = None, *, now: datetime | None = None, fetch=data
             r.alerts["late"] = f"run at {now.astimezone(NY):%Y-%m-%d %H:%M} New York for the {r.day:%Y-%m-%d} close"
         rules = engine.Rules.from_config(cfg)
         commit, digest = git_commit(), hashlib.sha256(cfg_file.read_bytes()).hexdigest()[:12]
+        # The whole backtest of the followed strategy and the benchmarks: their 1-25 year record and the drop stop.
+        history = {sid: engine.backtest(s, market, rules, value=cfg.start_value, liquidate=False)[0]
+                   for sid, s in cfg.strategies.items() if sid == cfg.follow or s.benchmark}
+        usd = r.fx.get("USD") if cfg.base_currency != "USD" else None
+        if cfg.base_currency == "USD" or usd is not None:
+            for sid, values in history.items():
+                if usd is not None:
+                    values = values * usd.reindex(values.index, method="ffill")
+                r.track[sid] = trailing(values.dropna(), r.day, px["^IRX.close"].dropna() / 100 if "^IRX.close" in px else None)
         for sid, strategy in cfg.strategies.items():
             r.decisions[sid] = decide(r, cfg, market, strategy, rules)
             if sid == cfg.follow:
-                strategy_alerts(r, cfg, market, strategy, rules, r.decisions[sid])
+                strategy_alerts(r, strategy, history[sid], r.decisions[sid])
         for sid, d in r.decisions.items():
             store.log_decision(db, r.day, sid, now.isoformat(timespec="seconds"), commit, digest, d)
         stamp = now.isoformat(timespec="seconds")
-        started, cleared = store.update_alerts(db, r.alerts, stamp)
-        failures = []
-        for key, detail in started.items():
-            failures += notify.send(cfg, "alerts", f"Trendkeeper alert: {key}", detail, senders)
-        for key, detail in cleared.items():
-            failures += notify.send(cfg, "alerts", f"Trendkeeper cleared: {key}", detail, senders)
-        text = summary(r, cfg)
-        failures += notify.send(cfg, "daily", f"Trendkeeper {r.day:%Y-%m-%d}", text, senders)
+        # A notify alert stays open until this run's messages have gone out, so it can't clear and reopen each run.
+        if "notify" in (opened := store.open_alerts(db)):
+            r.alerts["notify"] = opened["notify"][1]
+
+        def send_alert_changes():
+            started, cleared = store.update_alerts(db, r.alerts, stamp)
+            out = []
+            for key, detail in started.items():
+                out += notify.send(cfg, "alerts", alert_subject(key), detail, senders)
+            for key, detail in cleared.items():
+                out += notify.send(cfg, "alerts", alert_subject(key, cleared=True), detail, senders)
+            return out
+
+        failures = send_alert_changes()
+        text, slack, html = summary(r, cfg)
+        failures += notify.send(cfg, "daily", subject(r, cfg), text, senders,
+                                rich={"slack": slack, "email": {"text": text, "html": html}})
         if failures:
             r.alerts["notify"] = "; ".join(dict.fromkeys(failures))
-            store.update_alerts(db, r.alerts, stamp)
-            text = summary(r, cfg)
+        else:
+            r.alerts.pop("notify", None)
+        send_alert_changes()
+        text = summary(r, cfg)[0]
         write_status(root / "status.txt", text)
         pinger()
         return 0
@@ -313,7 +594,7 @@ def run(cfg_file: Path | None = None, *, now: datetime | None = None, fetch=data
         message = f"Trendkeeper run FAILED at {now.astimezone(NY):%Y-%m-%d %H:%M} New York: {type(e).__name__}: {e}"
         write_status(root / "status.txt", message)
         pinger("/fail")
-        notify.send(cfg, "alerts", "Trendkeeper run failed", message, senders)
+        notify.send(cfg, "alerts", "❌ Trendkeeper: the daily run failed", message, senders)
         raise
     finally:
         db.close()
