@@ -24,3 +24,13 @@ def test_research_setup_passes_with_next_open(cfg):
     market = engine.build_market(cfg, load_snapshot(HERE / "data" / "prices.csv.gz"))
     checks = gate.run(cfg, market, "mix_30_30_40", "spy", engine.Rules.from_config(cfg, execution="next_open"))
     assert [c.passed for c in checks] == [True] * 4, checks
+
+
+def test_the_real_config_passes_the_gate():
+    # Milestone 1 closed on this result. Filling in the trade cost, tax rate and start size
+    # (milestone 3's entry condition) re-runs it here; a failure means don't trade.
+    real = config.load(HERE.parent / "bot" / "config.toml")
+    px = load_snapshot(HERE / "data" / "prices.csv.gz", HERE / "data" / "eur.csv.gz")
+    market = engine.build_market(real, px)
+    checks = gate.run(real, market, real.follow, "spy", engine.Rules.from_config(real), "1999-01-04")
+    assert [c.passed for c in checks] == [True] * 4, checks
