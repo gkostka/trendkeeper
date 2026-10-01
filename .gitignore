@@ -5,4 +5,6 @@ venv/
 .env
 *.sqlite
 *.db
+transactions.csv
+overrides.csv
 .DS_Store

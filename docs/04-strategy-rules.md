@@ -3,7 +3,7 @@
 
 # Strategy rules
 
-Every strategy here follows one rule. Hold the 2× fund while its index closes above its moving averages, and step out to cash as it closes below them. There is no fixed holding period and no price target: you hold for as long as the trend lasts. In the backtest that ranged from a few days to over three years. The mixes add a fixed slice of Treasury bonds and rebalance once a month.
+Every strategy here follows one rule. Hold the 2× fund while its index closes above its moving averages, and step out to cash as it closes below them. There is no fixed holding period and no price target: you hold for as long as the trend lasts. In the backtest that ranged from a few days to over three years. The mixes add a fixed slice of Treasury bonds and rebalance once a month. The numbers on this tab come from the research scripts (US funds, traded at the same close); they are replaced by the engine's results once milestone 1 passes.
 
 ## Daily decision
 
@@ -23,7 +23,7 @@ The bot does nothing on most days. It trades only on the 13 or so days a year wh
 | 100% 2× Nasdaq trend | 100% Nasdaq slice (QLD or cash) | QQQ | Not needed |
 | SPY / QQQ buy-and-hold | 100% SPY or QQQ | None | None: buy once, never sell |
 
-The rule for every trend slice, checked each trading day just before the close:
+The tables use the US funds the research tested; the UCITS version below maps each to its European equivalent. The rule for every trend slice, checked each trading day at the US close:
 
 1. Take the adjusted closing price of the signal ETF (SPY or QQQ) and its 200, 250 and 300-day simple moving averages.
 2. Count how many of the three averages the price is above: 0, 1, 2 or 3.
@@ -31,12 +31,12 @@ The rule for every trend slice, checked each trading day just before the close:
 4. **Enter:** the count rises, so buy one third of the slice for each average crossed upward.
 5. **Exit:** the count falls, so sell one third of the slice for each average crossed downward. At a count of 0 the slice is all cash.
 6. **Otherwise, hold.** There is no stop-loss, no profit target and no time limit. The averages are the exit.
-7. Trade with market-on-close orders, so the fill matches the closing price the backtest assumed.
+7. Trade when the config's execution setting says. The research assumed market-on-close orders on US funds; a European account trades the UCITS funds at the next European open (UCITS version below).
 
 Other rules:
 
 - **Bonds (IEF)** are never traded on a signal. They change only at the monthly rebalance.
-- **Cash** should earn interest. The backtest assumed T-bill rates, which IBKR pays on idle cash above a minimum, or hold a T-bill ETF such as BIL.
+- **Cash** should earn interest. The backtest assumed T-bill rates, which IBKR pays on idle cash above a minimum, or hold a T-bill ETF such as BIL. A EUR account earns roughly the ECB deposit rate minus IBKR's spread; the main tab's config models that.
 - **Monthly rebalance:** on the first trading day of each month, reset the slices to their target weights. A slice's value includes its cash, so the rebalance doesn't change the trend positions, only their size.
 
 ## How long you hold
@@ -121,7 +121,7 @@ The moving averages handle normal exits. These rules cover the cases where the s
 | Trigger | Action |
 | --- | --- |
 | Drop exceeds 1.5× the backtest's worst (30/30/40: −45%, 40/40/20: −64%, 2× S&P trend: −58%) | Move to cash and review before restarting |
-| A 2× fund's daily move strays far from 2× its index (for example, more than 1 point off on a normal day) | Halt trading on that fund and check the data and the fund |
+| A 2× fund's weekly move strays far from 2× its index's (for example, more than 1 point off). Weekly, because European funds close 4.5 hours before the US and daily gaps are noise | Halt trading on that fund and check the data and the fund |
 | Market data stale, IBKR disconnected, or positions don't match the bot's records | The bot's kill switch (main tab): no new orders until reconciled |
 | A fund announces closure, a merger or a change of objective | Switch to the nearest equivalent (for example, SSO to a 2× S&P 500 fund from another provider) |
 

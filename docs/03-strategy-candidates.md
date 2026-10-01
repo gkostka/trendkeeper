@@ -5,7 +5,7 @@
 
 The bot as designed fits slow strategies best: daily or monthly decisions on a handful of liquid ETFs. Start with a monthly trend or momentum rotation. It trades a few times a year, is well documented, and lets you prove the bot itself with little at stake. Faster intraday ideas look great in papers but mostly disappear after real trading costs.
 
-None of these is a promise of profit. Each is a starting point to backtest on your own data before risking money.
+None of these is a promise of profit. All numbers on this tab come from the research scripts (US funds, traded at the same close) and are replaced by the engine's results once milestone 1 passes. Each is a starting point to backtest on your own data before risking money.
 
 ## Shortlist
 
