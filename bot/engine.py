@@ -388,7 +388,7 @@ def backtest(strategy: Strategy, market: Market, rules: Rules, start=None, end=N
     # By default, start on the last day before every fund has a return, the first day all of them have a price.
     start = start or dates[market.pos(max(starts.values())) - 1]
     dates = dates[(dates >= start) & (dates < (end or dates[-1] + pd.Timedelta(days=1)))]
-    if late := {f: f"{d:%Y-%m-%d}" for f, d in starts.items() if d > dates[1]}:
+    if late := {f: f"{d:%Y-%m-%d}" for f, d in starts.items() if d > dates[min(1, len(dates) - 1)]}:
         raise ValueError(f"no data at the start {dates[0]:%Y-%m-%d} for {late}")
     state = start_state(strategy, market, dates[0], value, rules)
     values, trades = [state.value], []

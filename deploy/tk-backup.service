@@ -1,0 +1,11 @@
+[Unit]
+Description=Trendkeeper nightly backup
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=trendkeeper
+WorkingDirectory=/opt/trendkeeper
+EnvironmentFile=/etc/trendkeeper.env
+ExecStart=/opt/trendkeeper/.venv/bin/python -m bot.backup

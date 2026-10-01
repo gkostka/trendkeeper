@@ -1,0 +1,12 @@
+[Unit]
+Description=Trendkeeper daily run, two hours after the US close
+
+[Timer]
+# New York time, so the run stays two hours after the close through both daylight-saving switches.
+OnCalendar=Mon..Fri 18:00 America/New_York
+# A run missed while the device was off or rebooting starts as soon as it is back.
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

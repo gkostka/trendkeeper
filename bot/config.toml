@@ -9,6 +9,20 @@ min_trade = 0.02           # skip rebalance trades under 2% of the portfolio
 whole_shares = true
 start_value = 30000        # placeholder: your planned portfolio size (open question)
 cash = "EUR_CASH"
+start = 2026-10-01         # "since start" results and the daily advice begin here
+data_dir = "/var/lib/trendkeeper"   # database, transactions, overrides, status; outside the repo
+xetra_holidays = [         # weekdays Xetra is shut (Deutsche Börse); add the next year each December
+  2026-12-24, 2026-12-25, 2026-12-31,
+  2027-01-01, 2027-03-26, 2027-03-29, 2027-12-24, 2027-12-31,
+]
+
+[notify]
+alerts = ["slack", "email"]   # when a problem starts and when it clears
+daily = ["slack"]             # signals, action, open alerts
+weekly = ["email", "slack"]
+email_to = "you@example.com"  # placeholder
+# Secrets live in /etc/trendkeeper.env, never here: TK_SLACK_WEBHOOK, TK_SMTP_HOST, TK_SMTP_PORT,
+# TK_SMTP_USER, TK_SMTP_PASSWORD, TK_HEALTHCHECK_DAILY
 
 [instrument.EUR_CASH]
 currency = "EUR"

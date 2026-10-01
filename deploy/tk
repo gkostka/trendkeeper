@@ -1,0 +1,3 @@
+#!/bin/sh
+# Install as /usr/local/bin/tk. Reads the status without needing the secrets; `sudo -u trendkeeper tk check` checks them.
+PYTHONPATH=/opt/trendkeeper exec /opt/trendkeeper/.venv/bin/python -m bot.cli "$@"

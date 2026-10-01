@@ -1,0 +1,12 @@
+[Unit]
+Description=Trendkeeper daily run
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=trendkeeper
+WorkingDirectory=/opt/trendkeeper
+EnvironmentFile=/etc/trendkeeper.env
+ExecStart=/opt/trendkeeper/.venv/bin/python -m bot.daily
+TimeoutStartSec=30min

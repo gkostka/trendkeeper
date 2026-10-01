@@ -1,5 +1,7 @@
+import os
 import tomllib
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
+from datetime import date
 from pathlib import Path
 
 EXECUTIONS = ("same_close", "next_open", "next_close")
@@ -42,6 +44,28 @@ class Strategy:
     benchmark: bool = False
 
 
+CHANNELS = ("slack", "email")
+DEFAULT = Path(__file__).resolve().parent / "config.toml"
+
+
+def path() -> Path:
+    """The config file: TK_CONFIG if set, else bot/config.toml."""
+    return Path(os.environ.get("TK_CONFIG", DEFAULT))
+
+
+def data_dir(cfg: "Config") -> Path:
+    """Where the database, status and personal files live: TK_DATA_DIR if set, else the config's data_dir."""
+    return Path(os.environ.get("TK_DATA_DIR", cfg.data_dir))
+
+
+@dataclass(frozen=True)
+class Notify:
+    alerts: tuple[str, ...] = ()
+    daily: tuple[str, ...] = ()
+    weekly: tuple[str, ...] = ()
+    email_to: str | None = None
+
+
 @dataclass(frozen=True)
 class Config:
     instruments: dict[str, Instrument]
@@ -56,6 +80,10 @@ class Config:
     fx_cost: float = 0.0
     fx_min: float = 0.0
     follow: str | None = None
+    start: date | None = None
+    data_dir: str = "/var/lib/trendkeeper"
+    xetra_holidays: tuple[date, ...] = ()
+    notify: Notify = field(default_factory=Notify)
 
 
 class ConfigError(ValueError):
@@ -87,6 +115,11 @@ def loads(text: str) -> Config:
         strategies[s["id"]] = _make(Strategy, f"strategy {s['id']}", slices=slices, **s)
     if "cash" not in raw:
         raise ConfigError("cash is required: the instrument whose rate uninvested money earns")
+    if "notify" in raw:
+        n = raw.pop("notify")
+        raw["notify"] = _make(Notify, "notify", **{k: tuple(v) if isinstance(v, list) else v for k, v in n.items()})
+    if "xetra_holidays" in raw:
+        raw["xetra_holidays"] = tuple(raw["xetra_holidays"])
     known = {f.name for f in fields(Config)} - {"instruments", "strategies"}
     if unknown := sorted(set(raw) - known):
         raise ConfigError(f"unknown settings {unknown}; known: {sorted(known)}")
@@ -100,6 +133,12 @@ def check(cfg: Config) -> None:
         raise ConfigError(f"execution must be one of {EXECUTIONS}, not {cfg.execution!r}")
     if cfg.follow is not None and cfg.follow not in cfg.strategies:
         raise ConfigError(f"follow: no strategy {cfg.follow!r}")
+    n = cfg.notify
+    for kind in ("alerts", "daily", "weekly"):
+        if bad := sorted(set(getattr(n, kind)) - set(CHANNELS)):
+            raise ConfigError(f"notify.{kind}: unknown channels {bad}; known: {list(CHANNELS)}")
+    if "email" in n.alerts + n.daily + n.weekly and not n.email_to:
+        raise ConfigError("notify: email is used but email_to is not set")
     cash = cfg.instruments.get(cfg.cash)
     if cash is None or cash.rate is None:
         raise ConfigError(f"cash instrument {cfg.cash!r} must be listed and have a rate")
