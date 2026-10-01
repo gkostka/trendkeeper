@@ -1,0 +1,93 @@
+# Trendkeeper config: UCITS funds at IBKR, valued in EUR. See docs/01, "Defining strategies".
+base_currency = "EUR"
+follow = "mix_30_30_40"
+execution = "next_open"    # signal at the US close, trade at the next Xetra/Paris open
+trade_cost = 0.0005        # per side; research value until milestone 1 measures commission + half spread
+fx_cost = 0.00002          # IBKR manual EUR/USD conversion: 0.002%...
+fx_min = 2.0               # ...with a minimum of about 2 per conversion
+min_trade = 0.02           # skip rebalance trades under 2% of the portfolio
+whole_shares = true
+start_value = 30000        # placeholder: your planned portfolio size (open question)
+cash = "EUR_CASH"
+
+[instrument.EUR_CASH]
+currency = "EUR"
+rate = "ecb_dfr"
+spread = 0.005             # IBKR Pro pays the benchmark rate minus 0.5%
+free = 10000               # nothing on roughly the first 10,000
+full_rate_nav = 100000     # below this account size the rate scales down in proportion
+
+[instrument.SPY]           # signal for the S&P slice, and the benchmark
+currency = "USD"
+
+[instrument.QQQ]           # signal for the Nasdaq slice, and a benchmark
+currency = "USD"
+backfill = "^NDX"
+
+[instrument.VFITX]         # stands in for SXRM before it listed in 2009
+currency = "USD"
+
+[instrument."DBPG.DE"]     # Xtrackers S&P 500 2x, EUR on Xetra
+currency = "EUR"
+tracks = "SPY"
+leverage = 2
+cost = 0.0095              # yearly, applied daily; bot.calibrate on DBPG itself: 0.58% from listing, 0.95% from 2012 (bad 2010-11 prints); the higher kept
+financing = "tbill"
+
+[instrument."LQQ.PA"]      # Amundi Nasdaq-100 2x, EUR in Paris
+currency = "EUR"
+tracks = "QQQ"
+leverage = 2
+cost = 0.0139              # bot.calibrate on LQQ itself: 1.39% from listing, 1.21% from 2012; the higher kept
+financing = "tbill"
+
+[instrument."SXRM.DE"]     # iShares $ Treasury 7-10yr, USD line on Xetra (hedged IBB1: open question)
+currency = "USD"
+backfill = "VFITX"
+
+[[strategy]]
+id = "mix_30_30_40"        # never edit the rules of an id in use; add a new id instead
+name = "Mix 30/30/40"
+rebalance = "monthly"
+tax_rate = 0.0             # placeholder: your rate on realized gains (open question)
+
+  [[strategy.slice]]
+  weight = 0.30
+  fund = "DBPG.DE"
+  rule = "trend"
+  signal = "SPY"
+  windows = [200, 250, 300]
+
+  [[strategy.slice]]
+  weight = 0.30
+  fund = "LQQ.PA"
+  rule = "trend"
+  signal = "QQQ"
+  windows = [200, 250, 300]
+
+  [[strategy.slice]]
+  weight = 0.40
+  fund = "SXRM.DE"
+  rule = "hold"
+
+[[strategy]]
+id = "spy"
+name = "S&P 500 buy-and-hold"
+benchmark = true
+tax_rate = 0.0             # same rate as the strategies it is compared with
+
+  [[strategy.slice]]
+  weight = 1.0
+  fund = "SPY"
+  rule = "hold"
+
+[[strategy]]
+id = "qqq"
+name = "Nasdaq-100 buy-and-hold"
+benchmark = true
+tax_rate = 0.0
+
+  [[strategy.slice]]
+  weight = 1.0
+  fund = "QQQ"
+  rule = "hold"

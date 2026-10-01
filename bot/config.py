@@ -3,7 +3,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 EXECUTIONS = ("same_close", "next_open", "next_close")
-RATES = {"tbill": "^IRX"}
+RATES = {"tbill": "^IRX", "ecb_dfr": "^DFR"}
+FX = {("USD", "EUR"): "EURUSD"}  # column holds units of the first currency per one of the second
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class Instrument:
     spread: float = 0.0
     free: float = 0.0
     full_rate_nav: float = 0.0
+    fx: str = "converted"
 
 
 @dataclass(frozen=True)
@@ -46,11 +48,14 @@ class Config:
     instruments: dict[str, Instrument]
     strategies: dict[str, Strategy]
     cash: str
+    base_currency: str = "USD"
     execution: str = "same_close"
     trade_cost: float = 0.0005
     min_trade: float = 0.0
     whole_shares: bool = False
     start_value: float = 1.0
+    fx_cost: float = 0.0
+    fx_min: float = 0.0
     extra: dict = field(default_factory=dict)
 
 
@@ -70,7 +75,8 @@ def load(source: str | Path) -> Config:
         strategies[s["id"]] = Strategy(slices=slices, **s)
     if "cash" not in raw:
         raise ConfigError("cash is required: the instrument whose rate uninvested money earns")
-    known = ("cash", "execution", "trade_cost", "min_trade", "whole_shares", "start_value")
+    known = ("cash", "base_currency", "execution", "trade_cost", "min_trade", "whole_shares", "start_value",
+             "fx_cost", "fx_min")
     cfg = Config(instruments=instruments, strategies=strategies,
                  **{k: raw.pop(k) for k in known if k in raw}, extra=raw)
     check(cfg)
@@ -86,7 +92,14 @@ def check(cfg: Config) -> None:
     for name in [cash.rate] + [i.financing for i in cfg.instruments.values() if i.tracks]:
         if name not in RATES:
             raise ConfigError(f"unknown rate {name!r}; known: {sorted(RATES)}")
+    pairs = {frozenset(k) for k in FX}
     for i in cfg.instruments.values():
+        if i.fx != "converted":
+            raise ConfigError(f"instrument {i.id}: only fx = 'converted' is supported")
+        tracked = cfg.instruments[i.tracks].currency if i.tracks in cfg.instruments else i.currency
+        for other in (cfg.base_currency, tracked):
+            if other != i.currency and frozenset((i.currency, other)) not in pairs:
+                raise ConfigError(f"instrument {i.id}: no exchange rate between {i.currency} and {other}")
         for ref in (i.tracks, i.backfill):
             if ref and ref not in cfg.instruments and not ref.startswith("^"):
                 raise ConfigError(f"instrument {i.id}: unknown instrument {ref!r}")

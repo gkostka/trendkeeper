@@ -1,4 +1,7 @@
-"""Milestone 1 gate: the pass marks in docs/01, run against one strategy and its neighbours."""
+"""Milestone 1 gate: the pass marks in docs/01, run against one strategy and its neighbours.
+
+    python -m bot.gate CONFIG SNAPSHOT[,SNAPSHOT] STRATEGY BENCHMARK EXECUTION [START]
+"""
 import sys
 from dataclasses import dataclass, replace
 from itertools import product
@@ -7,8 +10,8 @@ from pathlib import Path
 from bot import config, engine
 from bot.data import load_snapshot
 
-FULL = ("1994-01-01", "2026-10-01")
-PERIODS = [("1994-01-01", "2007-01-01"), ("2007-01-01", "2016-04-01"), ("2016-04-01", "2026-10-01")]
+END = "2026-10-01"
+PERIOD_STARTS = ["1994-01-01", "2007-01-01", "2016-04-01"]
 NEIGHBOUR_WEIGHTS = [0.20, 0.25, 0.30, 0.35, 0.40]
 
 
@@ -17,6 +20,12 @@ class Check:
     name: str
     passed: bool
     detail: str
+
+
+def spans(start: str):
+    """The full span and the three periods; a later start shortens the first period."""
+    starts = [max(start, PERIOD_STARTS[0])] + PERIOD_STARTS[1:]
+    return (starts[0], END), list(zip(starts, starts[1:] + [END]))
 
 
 def risk_adjusted(values, span):
@@ -36,59 +45,64 @@ def neighbours(strategy):
         yield replace(strategy, slices=tuple(replace(sl, weight=weights[k]) for k, sl in enumerate(strategy.slices)))
 
 
-def run(cfg, market, strategy_id, benchmark_id, rules: engine.Rules) -> list[Check]:
-    def values(s):
-        return engine.backtest(s, market, rules, value=cfg.start_value)[0]
+def _values(cfg, market, strategy, rules, full):
+    return engine.backtest(strategy, market, rules, start=full[0], value=cfg.start_value)[0]
 
-    strategy, bench = cfg.strategies[strategy_id], values(cfg.strategies[benchmark_id])
-    v = values(strategy)
-    s, b = engine.stats(v, *FULL), engine.stats(bench, *FULL)
-    bench_periods = [risk_adjusted(bench, p) for p in PERIODS]
+
+def run(cfg, market, strategy_id, benchmark_id, rules: engine.Rules, start="1994-01-01") -> list[Check]:
+    full, periods = spans(start)
+    strategy = cfg.strategies[strategy_id]
+    v, bench = (_values(cfg, market, s, rules, full) for s in (strategy, cfg.strategies[benchmark_id]))
+    s, b = engine.stats(v, *full), engine.stats(bench, *full)
+    bench_periods = [risk_adjusted(bench, p) for p in periods]
 
     def beats_in_periods(vals):
-        return all(risk_adjusted(vals, p) > bp for p, bp in zip(PERIODS, bench_periods))
+        return all(risk_adjusted(vals, p) > bp for p, bp in zip(periods, bench_periods))
 
-    near = [n for n in neighbours(strategy)]
-    near_ok = sum(beats_in_periods(values(n)) for n in near)
+    near = list(neighbours(strategy))
+    near_ok = sum(beats_in_periods(_values(cfg, market, n, rules, full)) for n in near)
     return [
         Check("Return over the full period", s["cagr"] >= b["cagr"] + 0.01,
-              f"{s['cagr']:.2%} against {b['cagr']:.2%} for {benchmark_id}"),
+              f"{s['cagr']:.2%} against {b['cagr']:.2%} for {benchmark_id}, {full[0][:4]}-{full[1][:4]}"),
         Check("Worst drop", s["max_dd"] >= -0.40, f"{s['max_dd']:.1%}"),
         Check("Each period", beats_in_periods(v),
-              ", ".join(f"{risk_adjusted(v, p):.2f} vs {bp:.2f}" for p, bp in zip(PERIODS, bench_periods))),
+              ", ".join(f"{a[:4]}-{z[:4]} {risk_adjusted(v, (a, z)):.2f} vs {bp:.2f}"
+                        for (a, z), bp in zip(periods, bench_periods))),
         Check("The neighbourhood", near_ok == len(near), f"{near_ok} of {len(near)} pass"),
     ]
 
 
-def records(cfg, market, strategy_id, benchmark_id, rules) -> list[str]:
+def records(cfg, market, strategy_id, benchmark_id, rules, start="1994-01-01") -> list[str]:
     """The buffer and tax results the gate records alongside its pass marks."""
+    full, periods = spans(start)
     strategy = cfg.strategies[strategy_id]
     out = []
     for b in (0.0, 0.01, 0.02):
         s = replace(strategy, slices=tuple(replace(sl, buffer=b) if sl.rule == "trend" else sl for sl in strategy.slices))
-        v = engine.backtest(s, market, rules, value=cfg.start_value)[0]
-        out.append(f"buffer {b:.0%}: " + ", ".join(f"{risk_adjusted(v, p):.2f}" for p in PERIODS)
-                   + f" return/worst drop by period; {engine.stats(v, *FULL)['cagr']:.2%} a year")
+        v = _values(cfg, market, s, rules, full)
+        out.append(f"buffer {b:.0%}: " + ", ".join(f"{risk_adjusted(v, p):.2f}" for p in periods)
+                   + f" return/worst drop by period; {engine.stats(v, *full)['cagr']:.2%} a year")
     for rate in (0.0, 0.2, 0.3):
-        v, b = (engine.backtest(replace(s, tax_rate=rate), market, rules, value=cfg.start_value)[0]
+        v, b = (_values(cfg, market, replace(s, tax_rate=rate), rules, full)
                 for s in (strategy, cfg.strategies[benchmark_id]))
-        out.append(f"tax {rate:.0%}: {engine.stats(v, *FULL)['cagr']:.2%} a year after tax, "
-                   f"{benchmark_id} {engine.stats(b, *FULL)['cagr']:.2%} (sold at the end, taxed once)")
+        out.append(f"tax {rate:.0%}: {engine.stats(v, *full)['cagr']:.2%} a year after tax, "
+                   f"{benchmark_id} {engine.stats(b, *full)['cagr']:.2%} (sold at the end, taxed once)")
     return out
 
 
 def main(argv):
-    cfg_path, snapshot, strategy_id, benchmark_id, execution = argv
+    cfg_path, snapshots, strategy_id, benchmark_id, execution, *rest = argv
+    start = rest[0] if rest else "1994-01-01"
     cfg = config.load(Path(cfg_path))
-    market = engine.build_market(cfg, load_snapshot(Path(snapshot)))
+    market = engine.build_market(cfg, load_snapshot(*(Path(p) for p in snapshots.split(","))))
     rules = engine.Rules.from_config(cfg, execution=execution)
-    checks = run(cfg, market, strategy_id, benchmark_id, rules)
+    checks = run(cfg, market, strategy_id, benchmark_id, rules, start)
     for c in checks:
         print(f"{'PASS' if c.passed else 'FAIL'}  {c.name}: {c.detail}")
     passed = all(c.passed for c in checks)
     print("Gate:", "PASSED" if passed else "FAILED")
     print("\nRecorded, not deciding:")
-    for line in records(cfg, market, strategy_id, benchmark_id, rules):
+    for line in records(cfg, market, strategy_id, benchmark_id, rules, start):
         print(" ", line)
     return 0 if passed else 1
 

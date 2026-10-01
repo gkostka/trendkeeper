@@ -1,4 +1,6 @@
 from dataclasses import replace
+
+import pandas as pd
 from pathlib import Path
 
 import pytest
@@ -117,3 +119,37 @@ def test_buffer_cuts_quick_reversals(cfg):
         _, trades, _ = engine.backtest(c.strategies["mix_30_30_40"], m, Rules.from_config(c))
         signal_trades.append(sum(t.reason == "signal" for t in trades))
     assert signal_trades[1] < signal_trades[0] * 0.8
+
+
+@pytest.fixture(scope="module")
+def eur():
+    from bot.config import load
+    cfg = load(HERE.parent / "bot" / "config.toml")
+    px = load_snapshot(HERE / "data" / "prices.csv.gz", HERE / "data" / "eur.csv.gz")
+    return cfg, px, engine.build_market(cfg, px)
+
+
+def test_usd_funds_are_valued_in_euros(eur):
+    cfg, px, market = eur
+    d = market.dates
+    sel = (d > "1999-01-04") & (d <= "2026-09-29")
+    growth = (1 + market.close_r["SPY"][sel]).prod()
+    spy, fx = px["SPY.close"].ffill(), px["EURUSD.close"].ffill()
+    a, b = d[sel][0] - pd.Timedelta(days=1), d[sel][-1]
+    want = (spy.asof(b) / fx.asof(b)) / (spy.asof(d[d <= a][-1]) / fx.asof(d[d <= a][-1]))
+    assert growth == pytest.approx(want, rel=1e-9)
+
+
+def test_splits_and_bad_prints_are_repaired_and_reported(eur):
+    _, _, market = eur
+    assert pd.Timestamp("2015-01-02") in market.repaired["LQQ.PA"]
+    assert abs(market.close_r["LQQ.PA"]).max() < 0.5 and abs(market.close_r["DBPG.DE"]).max() < 0.5
+
+
+def test_calibrated_cost_makes_the_model_grow_like_the_fund():
+    from bot.calibrate import measured_cost
+    extra = '\n[instrument.SSO]\ntracks = "SPY"\nleverage = 2\n'
+    cfg = config.load((HERE / "research.toml").read_text() + extra)
+    px = load_snapshot(HERE / "data" / "prices.csv.gz")
+    cost = measured_cost(cfg, px, "SSO")
+    assert cost == pytest.approx(0.0156, abs=5e-4)

@@ -4,7 +4,12 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 import pandas as pd
 
-from bot.config import RATES, Config, Instrument, Strategy
+from bot.config import FX, RATES, Config, Instrument, Strategy
+
+CALENDAR_DAY_SERIES = {"^DFR", "EURUSD"}
+# A day a fund moves this much more or less than its model can't be explained by the European close
+# coming 4.5 hours early (2x of SPY's worst intraday swing is well inside it): it's a split or a bad print.
+MAX_GAP = 0.20
 
 
 @dataclass(frozen=True)
@@ -16,6 +21,8 @@ class Market:
     open_r: dict[str, np.ndarray]
     price: dict[str, np.ndarray]
     priced: frozenset[str]
+    foreign: frozenset[str]
+    repaired: dict[str, tuple[pd.Timestamp, ...]]
     cash: np.ndarray
     levels: dict[str, pd.Series]
     _above: dict = field(default_factory=dict, repr=False, compare=False)
@@ -41,13 +48,15 @@ class Rules:
     cash_spread: float = 0.0
     cash_free: float = 0.0
     cash_full_rate_nav: float = 0.0
+    fx_cost: float = 0.0
+    fx_min: float = 0.0
 
     @classmethod
     def from_config(cls, cfg: Config, **overrides) -> "Rules":
         cash = cfg.instruments[cfg.cash]
         return replace(cls(execution=cfg.execution, cost=cfg.trade_cost, min_trade=cfg.min_trade,
                            whole_shares=cfg.whole_shares, cash_spread=cash.spread, cash_free=cash.free,
-                           cash_full_rate_nav=cash.full_rate_nav), **overrides)
+                           cash_full_rate_nav=cash.full_rate_nav, fx_cost=cfg.fx_cost, fx_min=cfg.fx_min), **overrides)
 
 
 @dataclass(frozen=True)
@@ -105,13 +114,31 @@ def _above(lv: pd.Series, window: int, buffer: float) -> pd.Series:
 
 
 def build_market(cfg: Config, px: pd.DataFrame, start="1992-01-01") -> Market:
-    close = px.filter(like=".close").rename(columns=lambda c: c[: -len(".close")]).ffill()
+    close = px.filter(like=".close").rename(columns=lambda c: c[: -len(".close")])
+    # Trading days come from market prices; rate and FX series list every calendar day.
+    traded = close.drop(columns=[c for c in close if c in CALENDAR_DAY_SERIES]).notna().any(axis=1)
+    close = close.ffill()[traded]
     open_ = px.filter(like=".open").rename(columns=lambda c: c[: -len(".open")])
     keep = close.index >= start
     close, open_ = close[keep], open_.reindex(close.index[keep])
-    rates = {name: (close[col] / 100 / 252).shift(1).fillna(0) for name, col in RATES.items()}
+    def rate(name):
+        return (close[RATES[name]] / 100 / 252).shift(1).fillna(0)
+
+    def per_unit(frm, to) -> pd.Series:
+        """Value of one unit of `frm` in `to`, each day."""
+        if frm == to:
+            return pd.Series(1.0, close.index)
+        return 1 / close[FX[(frm, to)]] if (frm, to) in FX else close[FX[(to, frm)]]
+
+    def convert(r, frm, to):
+        rate = per_unit(frm, to)
+        return (1 + r) * rate / rate.shift(1) - 1
+
+    def ccy(name):
+        return cfg.instruments[name].currency if name in cfg.instruments else "USD"
 
     returns: dict[str, tuple[pd.Series, pd.Series]] = {}
+    repaired: dict[str, tuple[pd.Timestamp, ...]] = {}
 
     def own(name):
         c = close[name]
@@ -134,10 +161,17 @@ def build_market(cfg: Config, px: pd.DataFrame, start="1992-01-01") -> Market:
             r, o = r.where(r.notna(), br), o.where(r.notna(), br)
         if inst.tracks:
             ur, uo = series(inst.tracks)
-            fin = rates[inst.financing]
+            fin = rate(inst.financing)
             sr = inst.leverage * ur - (inst.leverage - 1) * fin - inst.cost / 252
             so = inst.leverage * uo
-            r, o = r.where(r.notna(), sr), o.where(r.notna(), so)
+            # fx = "converted": the fund applies its leverage in the tracked currency, then converts.
+            sr, so = convert(sr, ccy(inst.tracks), inst.currency), convert(so, ccy(inst.tracks), inst.currency)
+            bad = r.notna() & sr.notna() & ((r - sr).abs() > MAX_GAP)
+            # The next day goes too: it carries the catch-up of a late US move, or the second half of a bad print.
+            bad = bad | bad.shift(1, fill_value=False)
+            if bad.any():
+                repaired[name] = tuple(r.index[bad])
+            r, o = r.where(r.notna() & ~bad, sr), o.where(r.notna() & ~bad, so)
         returns[name] = (r, o)
         return r, o
 
@@ -145,23 +179,28 @@ def build_market(cfg: Config, px: pd.DataFrame, start="1992-01-01") -> Market:
     levels = {name: (1 + series(name)[0]).cumprod() for name in signals}
 
     funds = {sl.fund for s in cfg.strategies.values() for sl in s.slices}
-    close_r = {f: series(f)[0].fillna(0) for f in funds}
+    base = cfg.base_currency
+    close_r = {f: convert(series(f)[0], ccy(f), base).fillna(0) for f in funds}
+    open_r = {f: convert(series(f)[1], ccy(f), base).fillna(0) for f in funds}
     price = {}
     for f in funds:
         index = (1 + close_r[f]).cumprod()
         if f in close:
             # Anchored at the listing price, not today's: from listing on, shares cost what they really did,
             # and no price depends on later data.
-            first = close[f].first_valid_index()
-            index = index * close[f][first] / index[first]
+            to_base = per_unit(ccy(f), base)
+            first = (close[f].notna() & to_base.notna()).idxmax()
+            index = index * close[f][first] * to_base[first] / index[first]
         price[f] = index.to_numpy()
     return Market(
         dates=close.index,
         close_r={f: r.to_numpy() for f, r in close_r.items()},
-        open_r={f: series(f)[1].fillna(0).to_numpy() for f in funds},
+        open_r={f: r.to_numpy() for f, r in open_r.items()},
         price=price,
         priced=frozenset(f for f in funds if f in close),
-        cash=rates[cfg.instruments[cfg.cash].rate].to_numpy(),
+        foreign=frozenset(f for f in funds if ccy(f) != base),
+        repaired=repaired,
+        cash=rate(cfg.instruments[cfg.cash].rate).to_numpy(),
         levels=levels,
     )
 
@@ -185,7 +224,8 @@ def _sell_lots(lots: tuple[Lot, ...], shares: float) -> tuple[tuple[Lot, ...], f
     return tuple(out), basis
 
 
-def _trade(s: SliceState, amount: float, price: float, rules: Rules, tax_rate: float, carry: float):
+def _trade(s: SliceState, amount: float, price: float, rules: Rules, tax_rate: float, carry: float,
+           foreign: bool = False):
     shares = amount / price
     if amount < 0 and -amount >= s.fund * (1 - 1e-9):
         shares = -s.shares
@@ -195,6 +235,8 @@ def _trade(s: SliceState, amount: float, price: float, rules: Rules, tax_rate: f
         return s, 0.0, 0.0, carry
     executed = shares * price
     fee = abs(executed) * rules.cost
+    if foreign:
+        fee += abs(executed) * rules.fx_cost + rules.fx_min
     tax = 0.0
     if shares > 0:
         lots = s.lots + (Lot(shares, executed + fee),)
@@ -236,7 +278,8 @@ def step(strategy: Strategy, state: State, market: Market, day, rules: Rules):
 
     def trade(k, s, amount, price, when, at, reason):
         nonlocal carry, paid
-        s, executed, tax, carry = _trade(s, amount, price, rules, strategy.tax_rate, carry)
+        fund = strategy.slices[k].fund
+        s, executed, tax, carry = _trade(s, amount, price, rules, strategy.tax_rate, carry, fund in market.foreign)
         if executed:
             paid += tax
             trades.append(Trade(when, strategy.slices[k].fund, executed, at, reason, tax))
