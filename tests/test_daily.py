@@ -54,14 +54,15 @@ def test_a_run_logs_the_day_writes_the_status_and_pings(tmp_path):
     code, outbox, pings = run(tmp_path)
     assert code == 0 and pings == [""]
     status = (tmp_path / "status.txt").read_text()
-    assert "Strategy: Mix 30/30/40 (" in status and "30-09-2026 Wednesday" in status and "Actions needed" in status and "Treasuries" in status
+    assert "Trendkeeper · 30-09-2026 Wednesday" in status and "Mix 30/30/40" in status
+    assert "Actions needed" in status and "Treasuries" in status
     db = store.connect(tmp_path / "tk.db")
     logged = {s: store.decisions(db, s, 1)[0] for s in ("mix_30_30_40", "spy", "qqq")}
     assert all(d["day"] == "2026-09-30" and d["held_back"] is None for d in logged.values())
-    daily_sent = [(ch, text) for ch, subject, text in outbox.sent if subject == "Mix 30/30/40 · 30-09-2026"]
+    daily_sent = [(ch, text) for ch, subject, text in outbox.sent if subject == "Trendkeeper · 30-09-2026"]
     assert [ch for ch, _ in daily_sent] == ["slack"]
     tables = [b for b in daily_sent[0][1]["blocks"] if b["type"] == "table"]
-    assert len(tables) == 7  # strategy, portfolio, performance, three backtests, action
+    assert len(tables) == 7  # strategies, actions, one portfolio, market, three backtests
     # Slack rejects the whole message over one zero-length cell.
     assert all(c["elements"][0]["elements"][0]["text"] for t in tables for r in t["rows"] for c in r)
     assert "Paper portfolio" not in status
@@ -69,9 +70,9 @@ def test_a_run_logs_the_day_writes_the_status_and_pings(tmp_path):
 
 def test_the_email_has_the_tables_as_html_and_the_text_as_its_plain_part(tmp_path):
     _, outbox, _ = run(tmp_path, Outbox(failing={"slack"}))
-    mail = [text for ch, subject, text in outbox.sent if ch == "email" and subject == "Mix 30/30/40 · 30-09-2026"]
+    mail = [text for ch, subject, text in outbox.sent if ch == "email" and subject == "Trendkeeper · 30-09-2026"]
     assert len(mail) == 1 and mail[0]["html"].count("<table") == 7
-    assert mail[0]["text"].startswith("Strategy: Mix 30/30/40 (") and "Strategy:" in mail[0]["text"]
+    assert mail[0]["text"].startswith("Trendkeeper · 30-09-2026 Wednesday") and "Portfolios:" in mail[0]["text"]
 
 
 def test_running_twice_logs_once_and_does_not_repeat_alerts(tmp_path):
@@ -101,7 +102,7 @@ def test_a_late_run_says_so(tmp_path):
 
 def test_a_failed_channel_falls_back_and_is_reported(tmp_path):
     _, outbox, _ = run(tmp_path, Outbox(failing={"slack"}))
-    daily_sent = [(ch, text) for ch, s, text in outbox.sent if s.startswith("Mix 30/30/40 · ")]
+    daily_sent = [(ch, text) for ch, s, text in outbox.sent if s == "Trendkeeper · 30-09-2026"]
     assert [ch for ch, _ in daily_sent] == ["email"] and "```" not in daily_sent[0][1]  # plain text, not Slack's
     assert "notify" in store.open_alerts(store.connect(tmp_path / "tk.db"))
 
@@ -313,3 +314,33 @@ def test_tk_check_flags_the_placeholder_email(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("TK_DATA_DIR", str(tmp_path))
     cli.main(["check"])
     assert "placeholder you@example.com" in capsys.readouterr().out
+
+
+def test_followed_strategies_share_one_summary(tmp_path):
+    two = CONFIG.read_text().replace('follow = "mix_30_30_40"', 'follow = ["mix_30_30_40", "small"]') + """
+[[strategy]]
+id = "small"
+name = "Small"
+start_value = 1000
+start = 2026-09-01
+tax_rate = 0.0
+
+  [[strategy.slice]]
+  weight = 1.0
+  fund = "SXRM.DE"
+  rule = "hold"
+"""
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(two)
+    outbox = Outbox()
+    daily.run(cfg_file, now=EVENING, fetch=fetch, second_close=second_close, senders=outbox.senders,
+              pinger=lambda suffix="": None, data_root=tmp_path)
+    sent = [text for ch, s, text in outbox.sent if s == "Trendkeeper · 30-09-2026"]
+    assert len(sent) == 1
+    overview = next(b for b in sent[0]["blocks"] if b["type"] == "table")
+    names = [row[0]["elements"][0]["elements"][0]["text"] for row in overview["rows"][1:]]
+    assert names == ["Mix 30/30/40", "Small", "S&P 500", "Nasdaq-100"]
+    small = store.decisions(store.connect(tmp_path / "tk.db"), "small", 1)[0]
+    assert small["since"] == "2026-09-01" and small["value"] == pytest.approx(1000, rel=0.05)
+    status = (tmp_path / "status.txt").read_text()
+    assert "\nSmall · €" in status and status.count("Trendkeeper · 30-09-2026") == 1

@@ -44,6 +44,8 @@ class Strategy:
     rebalance: str | None = None
     benchmark: bool = False
     description: str | None = None
+    start_value: float | None = None  # this strategy's capital and start, if not the config's
+    start: date | None = None
 
 
 CHANNELS = ("slack", "email")
@@ -53,6 +55,14 @@ DEFAULT = Path(__file__).resolve().parent / "config.toml"
 def path() -> Path:
     """The config file: TK_CONFIG if set, else bot/config.toml."""
     return Path(os.environ.get("TK_CONFIG", DEFAULT))
+
+
+def capital(cfg: "Config", s: Strategy) -> float:
+    return cfg.start_value if s.start_value is None else s.start_value
+
+
+def start(cfg: "Config", s: Strategy) -> date | None:
+    return cfg.start if s.start is None else s.start
 
 
 def data_dir(cfg: "Config") -> Path:
@@ -81,7 +91,7 @@ class Config:
     start_value: float = 1.0
     fx_cost: float = 0.0
     fx_min: float = 0.0
-    follow: str | None = None
+    follow: tuple[str, ...] = ()
     report_currencies: tuple[str, ...] = ()
     start: date | None = None
     data_dir: str = "/var/lib/trendkeeper"
@@ -121,6 +131,10 @@ def loads(text: str) -> Config:
     if "notify" in raw:
         n = raw.pop("notify")
         raw["notify"] = _make(Notify, "notify", **{k: tuple(v) if isinstance(v, list) else v for k, v in n.items()})
+    if isinstance(raw.get("follow"), str):
+        raw["follow"] = (raw["follow"],)
+    elif "follow" in raw:
+        raw["follow"] = tuple(raw["follow"])
     if "report_currencies" in raw:
         raw["report_currencies"] = tuple(raw["report_currencies"])
     if "xetra_holidays" in raw:
@@ -136,8 +150,8 @@ def loads(text: str) -> Config:
 def check(cfg: Config) -> None:
     if cfg.execution not in EXECUTIONS:
         raise ConfigError(f"execution must be one of {EXECUTIONS}, not {cfg.execution!r}")
-    if cfg.follow is not None and cfg.follow not in cfg.strategies:
-        raise ConfigError(f"follow: no strategy {cfg.follow!r}")
+    if missing := [sid for sid in cfg.follow if sid not in cfg.strategies]:
+        raise ConfigError(f"follow: no strategy {', '.join(map(repr, missing))}")
     pairs = {frozenset(k) for k in FX}
     for c in cfg.report_currencies:
         if c != cfg.base_currency and frozenset((c, cfg.base_currency)) not in pairs:

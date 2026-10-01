@@ -332,6 +332,7 @@ The terminal command, on `argparse` with pandas printing the tables:
 | `tk` | Alerts, today's signals and the distance to each crossing, your action, one line per strategy, and the last run, ping and backup | 2 |
 | `tk why <id>` | How today's target was reached: prices, averages, count, target, trades, commit | 2 |
 | `tk check` | Validates the config and the secrets without running anything | 2 |
+| `tk new` | Creates a strategy step by step (a ready-made mix or a weight per fund, its own capital and start date), checks it and follows it alongside the others or instead of them. All followed strategies share one daily summary: side by side, then the actions, each portfolio, the market and the backtests | 2 |
 | `tk trade buy DBPG.DE 35 @ 85.40 [--fees 3]` | Checks the row (known fund, sensible price, enough cash) and appends it to the transactions file | 3 |
 | `tk portfolio` | Your holdings against the target, the drift, and advice not yet acted on | 3 |
 | `tk strategies` | Every strategy against SPY and QQQ: month-to-date, year-to-date, since start, drop from peak, a text sparkline | 4 |

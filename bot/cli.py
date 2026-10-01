@@ -4,6 +4,7 @@
     tk why [ID]        how today's target was reached for a strategy (default: the one you follow)
     tk check           config, secrets and data, without running anything
     tk daily           run the daily job now
+    tk new             create a strategy step by step and follow it
 """
 import os
 import sqlite3
@@ -53,7 +54,7 @@ def why(strategy_id: str | None) -> int:
     from bot import daily, store
 
     cfg = _cfg()
-    sid = strategy_id or cfg.follow
+    sid = strategy_id or (cfg.follow[0] if cfg.follow else next(iter(cfg.strategies)))
     path = config.data_dir(cfg) / "tk.db"
     if not path.exists():
         print(f"No decision logged for {sid} yet ({path} is missing).")
@@ -129,6 +130,10 @@ def main(argv=None) -> int:
         from bot import daily
 
         return daily.run()
+    if cmd == "new":
+        from bot import new
+
+        return new.run()
     print(__doc__)
     return 2
 

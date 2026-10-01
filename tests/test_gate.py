@@ -32,5 +32,5 @@ def test_the_real_config_passes_the_gate():
     real = config.load(HERE.parent / "bot" / "config.toml")
     px = load_snapshot(HERE / "data" / "prices.csv.gz", HERE / "data" / "eur.csv.gz")
     market = engine.build_market(real, px)
-    checks = gate.run(real, market, real.follow, "spy", engine.Rules.from_config(real), "1999-01-04")
+    checks = gate.run(real, market, real.follow[0], "spy", engine.Rules.from_config(real), "1999-01-04")
     assert [c.passed for c in checks] == [True] * 4, checks
