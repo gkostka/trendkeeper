@@ -102,7 +102,7 @@ currency = "USD"
 currency = "EUR"
 tracks = "SPY"
 leverage = 2
-cost = 0.0095             # yearly, applied daily; measured with bot.calibrate
+cost = 0.0094             # yearly, applied daily; measured with bot.calibrate
 financing = "tbill"       # the rate that cost was measured against
 fx = "converted"          # converted: EUR/USD counts once; leveraged: twice (CL2)
 
