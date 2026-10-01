@@ -22,5 +22,5 @@ def test_neighbours_span_the_grid_and_keep_weights_whole(cfg):
 
 def test_research_setup_passes_with_next_open(cfg):
     market = engine.build_market(cfg, load_snapshot(HERE / "data" / "prices.csv.gz"))
-    checks = gate.run(cfg, market, "mix_30_30_40", "spy", "next_open")
+    checks = gate.run(cfg, market, "mix_30_30_40", "spy", engine.Rules.from_config(cfg, execution="next_open"))
     assert [c.passed for c in checks] == [True] * 4, checks

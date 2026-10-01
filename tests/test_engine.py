@@ -26,8 +26,9 @@ def market(cfg, px):
     return engine.build_market(cfg, px)
 
 
-def run(cfg, market, sid, execution="same_close"):
-    values, trades = engine.backtest(cfg.strategies[sid], market, execution, cfg.trade_cost)
+def run(cfg, market, sid, execution="same_close", **rules):
+    r = engine.Rules.from_config(cfg, execution=execution, **rules)
+    values, trades, _ = engine.backtest(cfg.strategies[sid], market, r)
     return engine.stats(values, START, END), values, trades
 
 
@@ -66,9 +67,10 @@ def test_buy_and_hold_is_the_fund_itself(px, cfg, market):
 
 def state_at(cfg, market, execution, cut):
     strategy = cfg.strategies["mix_30_30_40"]
-    state = engine.start_state(strategy, market, market.dates[0])
+    rules = engine.Rules.from_config(cfg, execution=execution)
+    state = engine.start_state(strategy, market, market.dates[0], 1.0, rules)
     for day in market.dates[1:][market.dates[1:] <= cut]:
-        state, _ = engine.step(strategy, state, market, day, execution, cfg.trade_cost)
+        state, _ = engine.step(strategy, state, market, day, rules)
     return state
 
 

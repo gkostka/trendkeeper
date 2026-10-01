@@ -36,9 +36,9 @@ def neighbours(strategy):
         yield replace(strategy, slices=tuple(replace(sl, weight=weights[k]) for k, sl in enumerate(strategy.slices)))
 
 
-def run(cfg, market, strategy_id, benchmark_id, execution) -> list[Check]:
+def run(cfg, market, strategy_id, benchmark_id, rules: engine.Rules) -> list[Check]:
     def values(s):
-        return engine.backtest(s, market, execution, cfg.trade_cost)[0]
+        return engine.backtest(s, market, rules, value=cfg.start_value)[0]
 
     strategy, bench = cfg.strategies[strategy_id], values(cfg.strategies[benchmark_id])
     v = values(strategy)
@@ -60,14 +60,36 @@ def run(cfg, market, strategy_id, benchmark_id, execution) -> list[Check]:
     ]
 
 
+def records(cfg, market, strategy_id, benchmark_id, rules) -> list[str]:
+    """The buffer and tax results the gate records alongside its pass marks."""
+    strategy = cfg.strategies[strategy_id]
+    out = []
+    for b in (0.0, 0.01, 0.02):
+        s = replace(strategy, slices=tuple(replace(sl, buffer=b) if sl.rule == "trend" else sl for sl in strategy.slices))
+        v = engine.backtest(s, market, rules, value=cfg.start_value)[0]
+        out.append(f"buffer {b:.0%}: " + ", ".join(f"{risk_adjusted(v, p):.2f}" for p in PERIODS)
+                   + f" return/worst drop by period; {engine.stats(v, *FULL)['cagr']:.2%} a year")
+    for rate in (0.0, 0.2, 0.3):
+        v, b = (engine.backtest(replace(s, tax_rate=rate), market, rules, value=cfg.start_value)[0]
+                for s in (strategy, cfg.strategies[benchmark_id]))
+        out.append(f"tax {rate:.0%}: {engine.stats(v, *FULL)['cagr']:.2%} a year after tax, "
+                   f"{benchmark_id} {engine.stats(b, *FULL)['cagr']:.2%} (sold at the end, taxed once)")
+    return out
+
+
 def main(argv):
     cfg_path, snapshot, strategy_id, benchmark_id, execution = argv
     cfg = config.load(Path(cfg_path))
-    checks = run(cfg, engine.build_market(cfg, load_snapshot(Path(snapshot))), strategy_id, benchmark_id, execution)
+    market = engine.build_market(cfg, load_snapshot(Path(snapshot)))
+    rules = engine.Rules.from_config(cfg, execution=execution)
+    checks = run(cfg, market, strategy_id, benchmark_id, rules)
     for c in checks:
         print(f"{'PASS' if c.passed else 'FAIL'}  {c.name}: {c.detail}")
     passed = all(c.passed for c in checks)
     print("Gate:", "PASSED" if passed else "FAILED")
+    print("\nRecorded, not deciding:")
+    for line in records(cfg, market, strategy_id, benchmark_id, rules):
+        print(" ", line)
     return 0 if passed else 1
 
 

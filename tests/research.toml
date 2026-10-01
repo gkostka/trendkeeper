@@ -1,7 +1,10 @@
 # The research setup (docs/03): US funds, trades at the signal's close, T-bill cash.
 execution = "same_close"
 trade_cost = 0.0005
-cash_rate = "tbill"
+cash = "TBILL"
+
+[instrument.TBILL]  # cash earns the 13-week T-bill rate, in full
+rate = "tbill"
 
 [instrument.SPY]
 
