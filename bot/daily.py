@@ -12,7 +12,7 @@ import subprocess
 import sys
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -76,12 +76,36 @@ def apply_overrides(px: pd.DataFrame, path: Path) -> pd.DataFrame:
     return px.sort_index()
 
 
-def update_prices(db, cfg, fetch) -> pd.DataFrame:
+def revised(cached: pd.DataFrame, fresh: pd.DataFrame, last: pd.Timestamp) -> bool:
+    """Whether `fresh` changes days the cache already had before `last`. After a dividend, auto_adjust lowers
+    every earlier price, so a cache patched only at its end would lose the dividend."""
+    days = fresh.index[fresh.index < last].intersection(cached.index)
+    cols = fresh.columns.intersection(cached.columns)
+    return bool((fresh.loc[days, cols] / cached.loc[days, cols] - 1).abs().gt(1e-5).any().any())
+
+
+def update_prices(db, cfg, fetch, upto: pd.Timestamp) -> pd.DataFrame:
+    """Fetches the last stretch again, or the whole history if Yahoo has revised older days. Nothing after `upto`
+    is kept: before the US close, Yahoo's row for today is a live price, not a close."""
+    def get(start):
+        px = fetch(cfg, start)
+        return px[px.index <= upto]
+
     last = store.last_price_day(db, "SPY.close")
-    # Yahoo revises recent days (dividends, late prints), so the last stretch is fetched again.
-    start = "1990-01-01" if last is None else f"{last - pd.Timedelta(days=REFETCH_DAYS):%Y-%m-%d}"
-    store.save_prices(db, fetch(cfg, start))
-    return store.load_prices(db)
+    fresh = get("1990-01-01" if last is None else f"{last - pd.Timedelta(days=REFETCH_DAYS):%Y-%m-%d}")
+    if last is not None and revised(store.load_prices(db), fresh, last):
+        fresh = get("1990-01-01")
+    store.save_prices(db, fresh)
+    px = store.load_prices(db)
+    return px[px.index <= upto]
+
+
+def holiday_alert(holidays, today: date) -> str | None:
+    if not any(h >= today for h in holidays):
+        return "xetra_holidays lists no day ahead: add this and next year's from Deutsche Börse"
+    if today.month == 12 and not any(h.year == today.year + 1 for h in holidays):
+        return f"xetra_holidays has no {today.year + 1} days yet: add them from Deutsche Börse"
+    return None
 
 
 def check_data(run: Run, cfg, px, market, second_close) -> None:
@@ -111,6 +135,38 @@ def check_data(run: Run, cfg, px, market, second_close) -> None:
             run.alerts[f"repaired:{fund}"] = "model used for " + ", ".join(f"{d:%Y-%m-%d}" for d in hits)
 
 
+def _advice(fund, amount, quote, reason, **extra) -> dict:
+    return {"fund": fund, "action": "buy" if amount > 0 else "sell", "amount": round(abs(amount), 2),
+            "shares": int(abs(amount) // quote), "reason": reason, **extra}
+
+
+def rebalance_advice(strategy, state, market, i, rules) -> list[dict]:
+    """The trades the coming monthly rebalance makes, estimated at today's close, as the engine makes them: each
+    slice back to its weight once the pending signal trades are done, sells first, buys no larger than the cash
+    on hand, and trades under min_trade skipped."""
+    total, amounts = state.value, []
+    cash = sum(s.cash for s in state.slices)
+    for sl, s in zip(strategy.slices, state.slices):
+        invested = s.held if s.pending is None else s.pending
+        fund = s.fund if s.pending is None else s.pending * s.value
+        cash -= fund - s.fund
+        amounts.append((invested * sl.weight * total - fund, sl.fund))
+    out = []
+    for amount, fund in sorted(amounts):
+        amount = min(amount, cash)
+        if abs(amount) >= max(rules.min_trade * total, 1e-9 * total):
+            out.append(_advice(fund, amount, market.price[fund][i] * market.scale[fund][i], "rebalance"))
+            cash -= amount
+    return out
+
+
+def describe(a: dict, currency: str) -> str:
+    text = f"{a['action']} about {a['amount']:,.0f} {currency} of {a['fund']} (~{a['shares']} shares)"
+    if a["reason"] == "rebalance":
+        return text + ", monthly rebalance"
+    return text + f", {a['from']:.0%} to {a['to']:.0%} invested"
+
+
 def signal_view(market, sl, i) -> dict:
     lv = market.levels[sl.signal]
     windows = []
@@ -132,12 +188,12 @@ def decide(run: Run, cfg, market, strategy, rules) -> dict:
     if run.held_back is None:
         for sl, s in zip(strategy.slices, state.slices):
             if s.pending is not None and s.pending != s.held:
-                amount = (s.pending - s.held) * s.value
                 quote = market.price[sl.fund][i] * market.scale[sl.fund][i]
-                advice.append({"fund": sl.fund, "action": "buy" if amount > 0 else "sell", "amount": round(abs(amount), 2),
-                               "shares": int(abs(amount) // quote), "from": s.held, "to": s.pending})
+                advice.append(_advice(sl.fund, (s.pending - s.held) * s.value, quote, "signal",
+                                      **{"from": s.held, "to": s.pending}))
         if strategy.rebalance == "monthly" and opens.month != run.day.month:
-            advice.append({"action": "rebalance", "to": [sl.weight for sl in strategy.slices]})
+            advice += rebalance_advice(strategy, state, market, i, rules)
+        advice.sort(key=lambda a: a["action"] != "sell")  # sells first, as the engine trades them
     return {
         "value": state.value,
         "since_start": values.iloc[-1] / values.iloc[0] - 1,
@@ -153,11 +209,6 @@ def decide(run: Run, cfg, market, strategy, rules) -> dict:
 
 
 def strategy_alerts(run: Run, cfg, market, strategy, rules, decision) -> None:
-    for sig in decision["signals"]:
-        for w in sig["windows"]:
-            if abs(w["distance"]) < NEAR:
-                run.alerts[f"near:{sig['signal']}:{w['window']}"] = (
-                    f"{sig['signal']} is {w['distance']:+.1%} from its {w['window']}-day average")
     worst = engine.stats(engine.backtest(strategy, market, rules, value=cfg.start_value)[0],
                          "1900-01-01", "2100-01-01")["max_dd"]
     if decision["drop_from_peak"] < 1.5 * worst:
@@ -172,20 +223,21 @@ def summary(run: Run, cfg) -> str:
         dists = "  ".join(f"{w['window']}d {w['distance']:+.1%}" for w in sig["windows"])
         above = [w["distance"] for w in sig["windows"] if w["distance"] > 0]
         exit_at = f"  next exit at about {-min(above) / (1 + min(above)):.1%}" if above else ""
-        lines.append(f"{sig['signal']:<4} {dists}  {round(sig['count'] * len(sig['windows']))}/{len(sig['windows'])}{exit_at}")
+        near = [f"{w['window']}d" for w in sig["windows"] if abs(w["distance"]) < NEAR]
+        near_at = f"  near the {', '.join(near)}: a trade is likely soon" if near else ""
+        lines.append(f"{sig['signal']:<4} {dists}  {round(sig['count'] * len(sig['windows']))}/{len(sig['windows'])}"
+                     f"{exit_at}{near_at}")
     if run.held_back:
-        lines.append(f"Action ({cfg.follow}): none today, held back because {run.held_back}")
+        lines.append(f"Paper action ({cfg.follow}): none today, held back because {run.held_back}")
     elif not follow["advice"]:
-        lines.append(f"Action ({cfg.follow}): no change")
+        lines.append(f"Paper action ({cfg.follow}): no change")
     for a in follow["advice"]:
-        if a["action"] == "rebalance":
-            lines.append(f"Action ({cfg.follow}): monthly rebalance at the Xetra open on {follow['trade_at']}")
-        else:
-            lines.append(f"Action ({cfg.follow}): {a['action']} about {a['amount']:,.0f} {cfg.base_currency} of {a['fund']} "
-                         f"(~{a['shares']} shares) at the Xetra open on {follow['trade_at']}")
+        lines.append(f"Paper action ({cfg.follow}): {describe(a, cfg.base_currency)}, at the open on {follow['trade_at']}")
     for sid, d in run.decisions.items():
         lines.append(f"{sid:<14} since start {d['since_start']:+.1%}  from peak {d['drop_from_peak']:+.1%}  "
                      f"value {d['value']:,.0f} {cfg.base_currency}")
+    lines.append("Paper actions trade the simulated portfolio, not your account; advice for your own holdings "
+                 "comes with milestone 3.")
     lines.append("Alerts: " + ("none" if not run.alerts else "; ".join(f"{k}: {v}" for k, v in sorted(run.alerts.items()))))
     return "\n".join(lines)
 
@@ -213,7 +265,9 @@ def run(cfg_file: Path | None = None, *, now: datetime | None = None, fetch=data
     db = store.connect(root / "tk.db")
     now = now or datetime.now(NY)
     try:
-        px = apply_overrides(update_prices(db, cfg, fetch), root / "overrides.csv")
+        upto = expected_us_day(now)
+        px = apply_overrides(update_prices(db, cfg, fetch, upto), root / "overrides.csv")
+        px = px[px.index <= upto]
         market = engine.build_market(cfg, px)
         signals = {sl.signal for s in cfg.strategies.values() for sl in s.slices if sl.rule == "trend"}
         r = Run(day=min(px[f"{t}.close"].last_valid_index() for t in signals), now=now)
@@ -225,8 +279,11 @@ def run(cfg_file: Path | None = None, *, now: datetime | None = None, fetch=data
             last = datetime.fromisoformat(marker.read_text().strip()) if marker.exists() else None
             if last is None or (now - last).total_seconds() > 36 * 3600:
                 r.alerts["backup"] = f"last good backup: {last:%Y-%m-%d %H:%M} UTC" if last else "no backup yet"
+        if note := holiday_alert(cfg.xetra_holidays, now.astimezone(NY).date()):
+            r.alerts["holidays"] = note
         close = datetime.combine(r.day.date(), datetime.min.time(), NY).replace(hour=16)
-        if (now - close).total_seconds() > 18 * 3600:
+        # A day already logged isn't late: on a US holiday the run sees the day before's close again.
+        if not store.logged(db, r.day) and (now - close).total_seconds() > 18 * 3600:
             r.alerts["late"] = f"run at {now.astimezone(NY):%Y-%m-%d %H:%M} New York for the {r.day:%Y-%m-%d} close"
         rules = engine.Rules.from_config(cfg)
         commit, digest = git_commit(), hashlib.sha256(cfg_file.read_bytes()).hexdigest()[:12]

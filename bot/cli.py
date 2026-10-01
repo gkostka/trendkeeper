@@ -27,12 +27,15 @@ def status(data_dir: Path) -> int:
 
 
 def why(strategy_id: str | None) -> int:
-    from bot import store
+    from bot import daily, store
 
     cfg = _cfg()
     sid = strategy_id or cfg.follow
-    db = store.connect(config.data_dir(cfg) / "tk.db")
-    rows = store.decisions(db, sid, limit=1)
+    path = config.data_dir(cfg) / "tk.db"
+    if not path.exists():
+        print(f"No decision logged for {sid} yet ({path} is missing).")
+        return 1
+    rows = store.decisions(store.connect(path, readonly=True), sid, limit=1)
     if not rows:
         print(f"No decision logged for {sid} yet.")
         return 1
@@ -49,7 +52,7 @@ def why(strategy_id: str | None) -> int:
     if d["held_back"]:
         print(f"  Held back: {d['held_back']}")
     for a in d["advice"]:
-        print(f"  Advice: {a}")
+        print(f"  Paper action: {daily.describe(a, cfg.base_currency)}, at the open on {d['trade_at']}")
     print("  Closes used (each in its own currency): " + ", ".join(f"{k} {v:,.4g}" for k, v in sorted(d["prices"].items())))
     return 0
 

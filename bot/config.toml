@@ -11,7 +11,8 @@ start_value = 30000        # placeholder: your planned portfolio size (open ques
 cash = "EUR_CASH"
 start = 2026-10-01         # "since start" results and the daily advice begin here
 data_dir = "/var/lib/trendkeeper"   # database, transactions, overrides, status; outside the repo
-xetra_holidays = [         # weekdays Xetra is shut (Deutsche Börse); add the next year each December
+xetra_holidays = [         # weekdays Xetra is shut (Deutsche Börse); add the next year each December.
+                           # Paris (LQQ) shuts on fewer days, so an LQQ trade can only wait a day too long
   2026-12-24, 2026-12-25, 2026-12-31,
   2027-01-01, 2027-03-26, 2027-03-29, 2027-12-24, 2027-12-31,
 ]

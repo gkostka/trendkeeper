@@ -12,7 +12,9 @@ HERE = Path(__file__).parent
 CONFIG = HERE.parent / "bot" / "config.toml"
 PX = load_snapshot(HERE / "data" / "prices.csv.gz", HERE / "data" / "eur.csv.gz")
 DAY = pd.Timestamp("2026-09-30")
+PREV = pd.Timestamp("2026-09-29")
 EVENING = datetime(2026, 9, 30, 18, 5, tzinfo=daily.NY)
+LATER = datetime(2026, 9, 30, 19, 30, tzinfo=daily.NY)
 
 
 def fetch(cfg, start):
@@ -20,7 +22,11 @@ def fetch(cfg, start):
 
 
 def second_close(ticker, shift=0.0):
-    return DAY, float(PX[f"{ticker}.close"][DAY]) * (1 + shift)
+    return second_close_on(ticker, DAY, shift)
+
+
+def second_close_on(ticker, day, shift=0.0):
+    return day, float(PX[f"{ticker}.close"][day]) * (1 + shift)
 
 
 class Outbox:
@@ -48,7 +54,7 @@ def test_a_run_logs_the_day_writes_the_status_and_pings(tmp_path):
     code, outbox, pings = run(tmp_path)
     assert code == 0 and pings == [""]
     status = (tmp_path / "status.txt").read_text()
-    assert "US close 2026-09-30" in status and "mix_30_30_40" in status and "Action (mix_30_30_40)" in status
+    assert "US close 2026-09-30" in status and "mix_30_30_40" in status and "Paper action (mix_30_30_40)" in status
     db = store.connect(tmp_path / "tk.db")
     logged = {s: store.decisions(db, s, 1)[0] for s in ("mix_30_30_40", "spy", "qqq")}
     assert all(d["day"] == "2026-09-30" and d["held_back"] is None for d in logged.values())
@@ -68,8 +74,11 @@ def test_closes_that_disagree_hold_back_the_advice_and_alert(tmp_path):
     d = store.decisions(store.connect(tmp_path / "tk.db"), "mix_30_30_40", 1)[0]
     assert d["held_back"] and d["advice"] == []
     assert any(s == "Trendkeeper alert: cross-check:SPY" for _, s, _ in outbox.sent)
-    _, outbox, _ = run(tmp_path)  # sources agree again: the alert clears, once
+    _, outbox, _ = run(tmp_path, now=LATER)  # sources agree again: the alert clears, once
     assert any(s == "Trendkeeper cleared: cross-check:SPY" for _, s, _ in outbox.sent)
+    # The log keeps both runs, and the latest says what was advised in the end.
+    both = store.decisions(store.connect(tmp_path / "tk.db"), "mix_30_30_40")
+    assert [bool(d["held_back"]) for d in both] == [False, True] and both[0]["advice"]
 
 
 def test_a_late_run_says_so(tmp_path):
@@ -154,3 +163,93 @@ def test_a_late_run_advises_the_next_open_still_ahead():
     late = datetime(2026, 10, 1, 12, 46, tzinfo=daily.NY)  # 18:46 in Frankfurt: the 1 Oct open has passed
     assert daily.next_xetra_open(DAY, set(), EVENING) == pd.Timestamp("2026-10-01")
     assert daily.next_xetra_open(DAY, set(), late) == pd.Timestamp("2026-10-02")
+
+
+def test_a_rebalance_that_would_not_trade_is_not_advised(tmp_path):
+    # Day one: the pending buys already bring every slice to its weight, so no rebalance line.
+    run(tmp_path)
+    d = store.decisions(store.connect(tmp_path / "tk.db"), "mix_30_30_40", 1)[0]
+    assert {a["action"] for a in d["advice"]} == {"buy"}
+
+
+def test_a_drifted_portfolio_is_advised_to_rebalance():
+    from bot import config, engine
+    cfg = config.load(CONFIG)
+    strategy, rules = cfg.strategies["mix_30_30_40"], engine.Rules.from_config(cfg)
+    market = engine.build_market(cfg, PX)
+    i = market.pos(DAY)
+    s = [engine.SliceState(fund=12000, cash=0, held=1.0), engine.SliceState(fund=9000, cash=0, held=1.0),
+         engine.SliceState(fund=9000, cash=0, held=1.0)]
+    advice = daily.rebalance_advice(strategy, engine.State(DAY, tuple(s)), market, i, rules)
+    assert [(a["fund"], a["action"], a["amount"]) for a in advice] == [("DBPG.DE", "sell", 3000), ("SXRM.DE", "buy", 3000)]
+    s[0] = engine.SliceState(fund=9000, cash=0, held=1.0)
+    s[2] = engine.SliceState(fund=12000, cash=0, held=1.0)
+    assert not daily.rebalance_advice(strategy, engine.State(DAY, tuple(s)), market, i, rules)
+
+
+def test_rebalance_advice_matches_what_the_engine_trades():
+    # The last month the engine rebalanced: the advice at the close before against its trades at the open.
+    # The open moves the portfolio overnight, so amounts agree to within 1% of its value, not exactly.
+    from bot import config, engine
+    cfg = config.load(CONFIG)
+    strategy = cfg.strategies["mix_30_30_40"]
+    rules = engine.Rules.from_config(cfg, whole_shares=False)
+    market = engine.build_market(cfg, PX)
+    _, trades, _ = engine.backtest(strategy, market, rules, start="2016-01-04", value=30000)
+    day = max(t.day for t in trades if t.reason == "rebalance")
+    done = {t.fund: t.amount for t in trades if t.reason == "rebalance" and t.day == day}
+    _, _, state = engine.backtest(strategy, market, rules, start="2016-01-04", end=day, value=30000, liquidate=False)
+    advice = daily.rebalance_advice(strategy, state, market, market.pos(day) - 1, rules)
+    assert {a["fund"] for a in advice} == set(done)
+    for a in advice:
+        assert (a["amount"] if a["action"] == "buy" else -a["amount"]) == pytest.approx(done[a["fund"]],
+                                                                                         abs=0.01 * state.value)
+
+
+def test_a_run_before_the_close_ignores_todays_live_price(tmp_path):
+    run(tmp_path, now=datetime(2026, 9, 30, 11, 0, tzinfo=daily.NY), second=lambda t: second_close_on(t, PREV))
+    db = store.connect(tmp_path / "tk.db")
+    assert store.decisions(db, "mix_30_30_40", 1)[0]["day"] == f"{PREV:%Y-%m-%d}"
+    assert store.last_price_day(db, "SPY.close") == PREV
+
+
+def test_a_dividend_that_rescales_history_is_fetched_in_full(tmp_path):
+    run(tmp_path)
+    # Yahoo after an ex-dividend day: every earlier SPY price lowered by the dividend.
+    adjusted = PX.copy()
+    adjusted.loc[adjusted.index < DAY, "SPY.close"] *= 0.99
+    daily.run(CONFIG, now=LATER, fetch=lambda cfg, start: adjusted[adjusted.index >= start], second_close=second_close,
+              senders=Outbox().senders, pinger=lambda suffix="": None, data_root=tmp_path)
+    cached = store.load_prices(store.connect(tmp_path / "tk.db"))
+    assert cached.loc["2020-01-02", "SPY.close"] == pytest.approx(PX.loc["2020-01-02", "SPY.close"] * 0.99)
+
+
+def test_tk_why_works_for_a_user_who_can_only_read(tmp_path, monkeypatch, capsys):
+    run(tmp_path)
+    monkeypatch.setenv("TK_DATA_DIR", str(tmp_path))
+    files = list(tmp_path.iterdir())
+    try:
+        for p in files:
+            p.chmod(0o444)
+        tmp_path.chmod(0o555)
+        assert cli.main(["why"]) == 0 and "Paper action" in capsys.readouterr().out
+    finally:
+        tmp_path.chmod(0o755)
+        for p in files:
+            p.chmod(0o644)
+
+
+def test_a_us_holiday_is_not_a_late_run(tmp_path):
+    def upto(day):
+        return lambda cfg, start: PX[(PX.index >= start) & (PX.index <= day)]
+    for now in (datetime(2026, 9, 29, 18, 5, tzinfo=daily.NY), EVENING):  # no US close on the 30th
+        daily.run(CONFIG, now=now, fetch=upto(PREV), second_close=lambda t: second_close_on(t, PREV),
+                  senders=Outbox().senders, pinger=lambda suffix="": None, data_root=tmp_path)
+    assert "late" not in store.open_alerts(store.connect(tmp_path / "tk.db"))
+
+
+def test_an_empty_holiday_list_raises_an_alert():
+    holidays = (pd.Timestamp("2026-12-24").date(), pd.Timestamp("2026-12-31").date())
+    assert daily.holiday_alert(holidays, pd.Timestamp("2026-10-01").date()) is None
+    assert "2027" in daily.holiday_alert(holidays, pd.Timestamp("2026-12-01").date())
+    assert "no day ahead" in daily.holiday_alert(holidays, pd.Timestamp("2027-01-04").date())

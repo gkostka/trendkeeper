@@ -14,7 +14,8 @@ sudo useradd --system --home /var/lib/trendkeeper --shell /usr/sbin/nologin tren
 sudo install -d -o trendkeeper -g trendkeeper -m 750 /var/lib/trendkeeper
 sudo usermod -aG trendkeeper "$USER"   # so `tk` can read the status
 
-# The code, Python 3.12 and the locked dependencies
+# The code, Python 3.12 and the locked dependencies. For a private repo, add a read-only deploy key for root
+# (GitHub: Settings, Deploy keys) and clone git@github.com:gkostka/trendkeeper.git instead
 sudo git clone https://github.com/gkostka/trendkeeper /opt/trendkeeper
 curl -LsSf https://astral.sh/uv/install.sh | sh
 cd /opt/trendkeeper && sudo -E ~/.local/bin/uv python install 3.12 && sudo -E ~/.local/bin/uv sync --frozen
@@ -41,7 +42,8 @@ sudo systemctl start tk-daily.service && tk
 sudo systemctl enable --now tk-daily.timer tk-backup.timer
 ```
 
-The first run downloads the full price history (a few minutes); later runs fetch the last ten days.
+The first run downloads the full price history (a few minutes). Later runs fetch the last ten days, or the full
+history again when Yahoo has revised older prices, as it does after every dividend.
 Run `tk` from `~/.bashrc` for interactive shells to see the status on every login.
 
 The healthcheck (for example healthchecks.io) needs one check, "daily", with a period of 1 day and a grace
