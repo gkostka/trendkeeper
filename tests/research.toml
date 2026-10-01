@@ -1,0 +1,68 @@
+# The research setup (docs/03): US funds, trades at the signal's close, T-bill cash.
+execution = "same_close"
+trade_cost = 0.0005
+cash_rate = "tbill"
+
+[instrument.SPY]
+
+[instrument.QQQ]
+backfill = "^NDX"   # price index before QQQ listed in 1999
+
+[instrument.VFITX]  # Vanguard intermediate Treasuries, the research's bond slice
+
+[instrument."2xSPY"]  # SSO's model: 2x SPY daily, cost measured against the real SSO
+tracks = "SPY"
+leverage = 2
+cost = 0.0182
+
+[instrument."2xQQQ"]  # QLD's model
+tracks = "QQQ"
+leverage = 2
+cost = 0.0201
+
+[[strategy]]
+id = "mix_30_30_40"
+name = "Mix 30/30/40"
+rebalance = "monthly"
+tax_rate = 0.0
+
+  [[strategy.slice]]
+  weight = 0.30
+  fund = "2xSPY"
+  rule = "trend"
+  signal = "SPY"
+  windows = [200, 250, 300]
+
+  [[strategy.slice]]
+  weight = 0.30
+  fund = "2xQQQ"
+  rule = "trend"
+  signal = "QQQ"
+  windows = [200, 250, 300]
+
+  [[strategy.slice]]
+  weight = 0.40
+  fund = "VFITX"
+  rule = "hold"
+
+[[strategy]]
+id = "spy"
+name = "S&P 500 buy-and-hold"
+benchmark = true
+tax_rate = 0.0
+
+  [[strategy.slice]]
+  weight = 1.0
+  fund = "SPY"
+  rule = "hold"
+
+[[strategy]]
+id = "qqq"
+name = "Nasdaq-100 buy-and-hold"
+benchmark = true
+tax_rate = 0.0
+
+  [[strategy.slice]]
+  weight = 1.0
+  fund = "QQQ"
+  rule = "hold"
