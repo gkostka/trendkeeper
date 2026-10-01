@@ -1,6 +1,7 @@
 import io
 import sys
 import urllib.request
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -11,18 +12,18 @@ ECB = "https://data-api.ecb.europa.eu/service/data/{}?format=csvdata&startPeriod
 ECB_SERIES = {"EURUSD": "EXR/D.USD.EUR.SP00.A", "^DFR": "FM/D.U2.EUR.4F.KR.DFR.LEV"}
 
 
-def download(tickers, start="1990-01-01", end="2026-10-01") -> pd.DataFrame:
+def download(tickers, start="1990-01-01", end=None) -> pd.DataFrame:
     import yfinance as yf
 
-    raw = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False)
+    raw = yf.download(tickers, start=start, end=end or date.today().isoformat(), auto_adjust=True, progress=False)
     close = raw["Close"].add_suffix(".close")
     open_ = raw["Open"].add_suffix(".open")
     return pd.concat([close, open_], axis=1).sort_index(axis=1)
 
 
-def download_ecb(end="2026-10-01") -> pd.DataFrame:
+def download_ecb(end=None) -> pd.DataFrame:
     """EUR/USD (USD per euro, ECB 14:15 CET fixing) and the ECB deposit rate in %, both daily from 1999."""
-    out = {}
+    end, out = end or date.today().isoformat(), {}
     for name, key in ECB_SERIES.items():
         with urllib.request.urlopen(ECB.format(key), timeout=60) as f:
             raw = pd.read_csv(io.StringIO(f.read().decode()), usecols=["TIME_PERIOD", "OBS_VALUE"])

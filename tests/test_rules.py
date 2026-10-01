@@ -40,7 +40,7 @@ tax_rate = 0.0
 
 @pytest.fixture(scope="module")
 def cfg():
-    return config.load((HERE / "research.toml").read_text() + PRICED)
+    return config.loads((HERE / "research.toml").read_text() + PRICED)
 
 
 @pytest.fixture(scope="module")
@@ -76,7 +76,8 @@ def test_cash_interest_follows_ibkr_terms():
 
 def test_whole_shares_buy_only_whole_shares(cfg, market):
     values, trades, state = run(cfg, market, "sso_mix", whole_shares=True)
-    assert trades and all(lot.shares == int(lot.shares) for s in state.slices for lot in s.lots)
+    quoted = [s.shares * market.scale[sl.fund][-1] for sl, s in zip(cfg.strategies["sso_mix"].slices, state.slices)]
+    assert trades and all(abs(n - round(n)) < 1e-6 for n in quoted)
     fractional = run(cfg, market, "sso_mix")[0]
     assert values.iloc[-1] == pytest.approx(fractional.iloc[-1], rel=0.01)
 
@@ -97,7 +98,8 @@ def test_min_trade_skips_small_rebalances(cfg, market):
 def test_buy_and_hold_pays_tax_on_the_gain_when_valued_at_the_end(cfg, market):
     spy = replace(cfg.strategies["spy"], tax_rate=0.25)
     values, _, state = engine.backtest(spy, market, Rules.from_config(cfg), start="2007-01-01", value=20_000.0)
-    assert values.iloc[-1] == pytest.approx(state.value - 0.25 * (state.value - 20_000.0))
+    fee = state.value * cfg.trade_cost
+    assert values.iloc[-1] == pytest.approx(state.value - fee - 0.25 * (state.value - fee - 20_000.0))
 
 
 def test_trading_strategy_pays_tax_as_it_goes(cfg, market):
@@ -114,7 +116,7 @@ def test_buffer_cuts_quick_reversals(cfg):
         "windows = [200, 250, 300]\n", "windows = [200, 250, 300]\n  buffer = 0.02\n")
     px = load_snapshot(HERE / "data" / "prices.csv.gz")
     signal_trades = []
-    for c in (cfg, config.load(buffered)):
+    for c in (cfg, config.loads(buffered)):
         m = engine.build_market(c, px)
         _, trades, _ = engine.backtest(c.strategies["mix_30_30_40"], m, Rules.from_config(c))
         signal_trades.append(sum(t.reason == "signal" for t in trades))
@@ -127,6 +129,49 @@ def eur():
     cfg = load(HERE.parent / "bot" / "config.toml")
     px = load_snapshot(HERE / "data" / "prices.csv.gz", HERE / "data" / "eur.csv.gz")
     return cfg, px, engine.build_market(cfg, px)
+
+
+def eur_states(cfg, market, start="1999-01-04"):
+    strategy = cfg.strategies["mix_30_30_40"]
+    rules = Rules.from_config(cfg, execution="next_open")
+    state = engine.start_state(strategy, market, start, cfg.start_value, rules)
+    for day in market.dates[market.dates > start]:
+        state, trades = engine.step(strategy, state, market, day, rules)
+        yield state, trades
+
+
+def test_buys_never_spend_more_cash_than_there_is(eur):
+    cfg, _, market = eur
+    assert min(sum(s.cash for s in state.slices) for state, _ in eur_states(cfg, market)) >= -1e-6
+
+
+def test_next_open_rebalances_at_the_open_after_the_month_ends(eur):
+    cfg, _, market = eur
+    rebalances = [t for _, trades in eur_states(cfg, market) for t in trades if t.reason == "rebalance"]
+    days = market.dates
+    assert rebalances and all(t.at == "open" for t in rebalances)
+    assert all(days[market.pos(t.day) - 1].month != t.day.month for t in rebalances)
+
+
+def test_a_start_before_the_data_is_refused(eur):
+    cfg, _, market = eur
+    with pytest.raises(ValueError, match="no data at the start"):
+        engine.backtest(cfg.strategies["mix_30_30_40"], market, Rules.from_config(cfg), start="1994-01-03")
+
+
+def test_whole_shares_are_counted_at_the_quote_after_a_split(eur):
+    cfg, px, market = eur
+    quote = px["LQQ.PA.close"].dropna()
+    assert market.price["LQQ.PA"][-1] * market.scale["LQQ.PA"][-1] == pytest.approx(quote.iloc[-1], rel=1e-6)
+    assert market.price["LQQ.PA"][-1] > 50 * quote.iloc[-1]
+
+
+def test_no_look_ahead_in_euros(eur):
+    cfg, px, market = eur
+    cut = pd.Timestamp("2018-12-31")
+    full = [s for s, _ in eur_states(cfg, market) if s.day <= cut][-1]
+    part = [s for s, _ in eur_states(cfg, engine.build_market(cfg, px[px.index <= cut]))][-1]
+    assert full == part
 
 
 def test_usd_funds_are_valued_in_euros(eur):
@@ -149,7 +194,7 @@ def test_splits_and_bad_prints_are_repaired_and_reported(eur):
 def test_calibrated_cost_makes_the_model_grow_like_the_fund():
     from bot.calibrate import measured_cost
     extra = '\n[instrument.SSO]\ntracks = "SPY"\nleverage = 2\n'
-    cfg = config.load((HERE / "research.toml").read_text() + extra)
+    cfg = config.loads((HERE / "research.toml").read_text() + extra)
     px = load_snapshot(HERE / "data" / "prices.csv.gz")
     cost = measured_cost(cfg, px, "SSO")
     assert cost == pytest.approx(0.0156, abs=5e-4)

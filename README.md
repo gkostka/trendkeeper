@@ -6,7 +6,7 @@ It runs unattended on a home Raspberry Pi or Jetson on Tailscale. Alerts and sum
 
 ## Status
 
-Planning is done; no bot code exists yet. Next is milestone 1: port the research into one engine, then test the strategy the way it would really be traded, against pass marks set in advance.
+Milestone 1 is under way. The engine reproduces the research, and the gate passes for the UCITS funds in EUR with next-day trading (`python -m bot.gate bot/config.toml tests/data/prices.csv.gz,tests/data/eur.csv.gz mix_30_30_40 spy next_open 1999-01-04`). It stays provisional until the trade cost is measured and the tax rate and portfolio size are set. Tests: `python -m pytest`.
 
 ## Docs
 
@@ -28,7 +28,7 @@ cd research
 python bt6.py
 ```
 
-They are kept as a record and will be frozen once `engine.py` reproduces them.
+`engine.py` reproduces them, so they are frozen: kept as a record, no longer changed.
 
 ## Disclaimer
 

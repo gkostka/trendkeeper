@@ -31,7 +31,7 @@ currency = "USD"
 currency = "EUR"
 tracks = "SPY"
 leverage = 2
-cost = 0.0095              # yearly, applied daily; bot.calibrate on DBPG itself: 0.58% from listing, 0.95% from 2012 (bad 2010-11 prints); the higher kept
+cost = 0.0094              # yearly, applied daily; bot.calibrate on DBPG itself: 0.57% from listing, 0.94% from 2012 (bad 2010-11 prints); the higher kept
 financing = "tbill"
 
 [instrument."LQQ.PA"]      # Amundi Nasdaq-100 2x, EUR in Paris

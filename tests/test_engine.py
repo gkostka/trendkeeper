@@ -62,7 +62,8 @@ def test_buy_and_hold_is_the_fund_itself(px, cfg, market):
     days = values.index[values.index >= spy.index[0]]
     growth = values[days] / values[days[0]]
     assert not trades
-    assert growth.iloc[-1] == pytest.approx(spy[days[-1]] / spy[days[0]], rel=1e-9)
+    # The last value is after selling, so it is net of one trade cost.
+    assert growth.iloc[-1] == pytest.approx(spy[days[-1]] / spy[days[0]] * (1 - cfg.trade_cost), rel=1e-9)
 
 
 def state_at(cfg, market, execution, cut):
@@ -102,11 +103,19 @@ def test_next_day_trades_one_day_after_the_signal(cfg, market):
 def test_config_rejects_bad_strategies():
     base = (HERE / "research.toml").read_text()
     with pytest.raises(config.ConfigError, match="tax_rate"):
-        config.load(base.replace('tax_rate = 0.0\n\n  [[strategy.slice]]\n  weight = 1.0\n  fund = "SPY"',
+        config.loads(base.replace('tax_rate = 0.0\n\n  [[strategy.slice]]\n  weight = 1.0\n  fund = "SPY"',
                                  '\n  [[strategy.slice]]\n  weight = 1.0\n  fund = "SPY"'))
     with pytest.raises(config.ConfigError, match="add up to 1"):
-        config.load(base.replace("weight = 0.40", "weight = 0.50"))
+        config.loads(base.replace("weight = 0.40", "weight = 0.50"))
     with pytest.raises(config.ConfigError, match="not an instrument"):
-        config.load(base.replace('fund = "VFITX"', 'fund = "IEF"'))
+        config.loads(base.replace('fund = "VFITX"', 'fund = "IEF"'))
     with pytest.raises(config.ConfigError, match="execution"):
-        config.load(base.replace('execution = "same_close"', 'execution = "tomorrow"'))
+        config.loads(base.replace('execution = "same_close"', 'execution = "tomorrow"'))
+    with pytest.raises(config.ConfigError, match="unknown settings"):
+        config.loads(base.replace("trade_cost =", "trade_costs ="))
+    with pytest.raises(config.ConfigError, match="follow"):
+        config.loads('follow = "mix_30_30"\n' + base)
+    with pytest.raises(config.ConfigError, match="used twice"):
+        config.loads(base + base[base.index("[[strategy]]"):])
+    with pytest.raises(config.ConfigError, match="instrument SPY"):
+        config.loads(base.replace("[instrument.SPY]\n", "[instrument.SPY]\nlevrage = 2\n"))

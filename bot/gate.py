@@ -7,10 +7,11 @@ from dataclasses import dataclass, replace
 from itertools import product
 from pathlib import Path
 
+import pandas as pd
+
 from bot import config, engine
 from bot.data import load_snapshot
 
-END = "2026-10-01"
 PERIOD_STARTS = ["1994-01-01", "2007-01-01", "2016-04-01"]
 NEIGHBOUR_WEIGHTS = [0.20, 0.25, 0.30, 0.35, 0.40]
 
@@ -22,10 +23,14 @@ class Check:
     detail: str
 
 
-def spans(start: str):
+def spans(start: str, end: str):
     """The full span and the three periods; a later start shortens the first period."""
     starts = [max(start, PERIOD_STARTS[0])] + PERIOD_STARTS[1:]
-    return (starts[0], END), list(zip(starts, starts[1:] + [END]))
+    return (starts[0], end), list(zip(starts, starts[1:] + [end]))
+
+
+def data_end(market) -> str:
+    return f"{market.dates[-1] + pd.Timedelta(days=1):%Y-%m-%d}"
 
 
 def risk_adjusted(values, span):
@@ -50,7 +55,7 @@ def _values(cfg, market, strategy, rules, full):
 
 
 def run(cfg, market, strategy_id, benchmark_id, rules: engine.Rules, start="1994-01-01") -> list[Check]:
-    full, periods = spans(start)
+    full, periods = spans(start, data_end(market))
     strategy = cfg.strategies[strategy_id]
     v, bench = (_values(cfg, market, s, rules, full) for s in (strategy, cfg.strategies[benchmark_id]))
     s, b = engine.stats(v, *full), engine.stats(bench, *full)
@@ -74,7 +79,7 @@ def run(cfg, market, strategy_id, benchmark_id, rules: engine.Rules, start="1994
 
 def records(cfg, market, strategy_id, benchmark_id, rules, start="1994-01-01") -> list[str]:
     """The buffer and tax results the gate records alongside its pass marks."""
-    full, periods = spans(start)
+    full, periods = spans(start, data_end(market))
     strategy = cfg.strategies[strategy_id]
     out = []
     for b in (0.0, 0.01, 0.02):

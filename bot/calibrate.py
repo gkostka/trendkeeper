@@ -24,6 +24,8 @@ def measured_cost(cfg: config.Config, px, fund: str, start=None, end=None) -> fl
     listed = px[f"{fund}.close"].first_valid_index()
     d = market.dates
     sel = (d > (start or listed + np.timedelta64(30, "D"))) & (d < (end or d[-1]))
+    # Repaired days already carry the model, with the cost under test, in place of the fund's own return.
+    sel &= ~d.isin(market.repaired.get(fund, ()))
     real, zero = market.close_r[fund][sel], market.close_r[model][sel]
     target = np.log1p(real).sum()
     lo, hi = -0.2, 0.2

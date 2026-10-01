@@ -112,7 +112,7 @@ Measured cost of each 2× fund, May 2010 to Sep 2026. Cost is the yearly gap bet
 | Amundi Nasdaq-100 2x (LQQ) | 0.60% | 2.2% a year | 1×, like holding a US fund |
 | Amundi MSCI USA 2x (CL2) | 0.50% | about 1.7% a year | 2×: EUR/USD moves are doubled |
 
-Read it as roughly ±0.3 points: European prices close 4.5 hours before the US, and one split day each in LQQ and CL2 was repaired. In the strategy the extra 0.2–0.4 points apply only to the trend slices, and only while they are invested. That costs a 30/30/40 portfolio about 0.1–0.2% a year compared with the US funds. Prefer Xtrackers for the S&P slice: its cost is close to CL2's, and its currency behaviour matches the backtest.
+Read it as roughly ±0.3 points: European prices close 4.5 hours before the US, and one split day each in LQQ and CL2 was repaired. In the strategy the extra 0.2–0.4 points apply only to the trend slices, and only while they are invested. That costs a 30/30/40 portfolio about 0.1–0.2% a year compared with the US funds. Prefer Xtrackers for the S&P slice: its cost is close to CL2's, and its currency behaviour matches the backtest. Re-measured in milestone 1 on DBPG and LQQ themselves, the way the engine charges it (daily): 0.94% and 1.39% a year (main tab, Values to measure).
 
 ## When to stop
 

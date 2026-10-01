@@ -1,5 +1,5 @@
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 EXECUTIONS = ("same_close", "next_open", "next_close")
@@ -20,7 +20,6 @@ class Instrument:
     spread: float = 0.0
     free: float = 0.0
     full_rate_nav: float = 0.0
-    fx: str = "converted"
 
 
 @dataclass(frozen=True)
@@ -56,29 +55,42 @@ class Config:
     start_value: float = 1.0
     fx_cost: float = 0.0
     fx_min: float = 0.0
-    extra: dict = field(default_factory=dict)
+    follow: str | None = None
 
 
 class ConfigError(ValueError):
     pass
 
 
-def load(source: str | Path) -> Config:
-    text = Path(source).read_text() if isinstance(source, Path) else source
+def load(path: str | Path) -> Config:
+    return loads(Path(path).read_text())
+
+
+def _make(cls, where: str, **kw):
+    try:
+        return cls(**kw)
+    except TypeError as e:
+        raise ConfigError(f"{where}: {e}") from None
+
+
+def loads(text: str) -> Config:
     raw = tomllib.loads(text)
-    instruments = {k: Instrument(id=k, **v) for k, v in raw.pop("instrument", {}).items()}
+    instruments = {k: _make(Instrument, f"instrument {k}", id=k, **v) for k, v in raw.pop("instrument", {}).items()}
     strategies = {}
     for s in raw.pop("strategy", []):
-        slices = tuple(Slice(**{**sl, "windows": tuple(sl.get("windows", ()))}) for sl in s.pop("slice"))
+        if s["id"] in strategies:
+            raise ConfigError(f"strategy {s['id']}: id used twice")
         if "tax_rate" not in s:
             raise ConfigError(f"strategy {s['id']}: tax_rate is required")
-        strategies[s["id"]] = Strategy(slices=slices, **s)
+        slices = tuple(_make(Slice, f"strategy {s['id']}", **{**sl, "windows": tuple(sl.get("windows", ()))})
+                       for sl in s.pop("slice"))
+        strategies[s["id"]] = _make(Strategy, f"strategy {s['id']}", slices=slices, **s)
     if "cash" not in raw:
         raise ConfigError("cash is required: the instrument whose rate uninvested money earns")
-    known = ("cash", "base_currency", "execution", "trade_cost", "min_trade", "whole_shares", "start_value",
-             "fx_cost", "fx_min")
-    cfg = Config(instruments=instruments, strategies=strategies,
-                 **{k: raw.pop(k) for k in known if k in raw}, extra=raw)
+    known = {f.name for f in fields(Config)} - {"instruments", "strategies"}
+    if unknown := sorted(set(raw) - known):
+        raise ConfigError(f"unknown settings {unknown}; known: {sorted(known)}")
+    cfg = Config(instruments=instruments, strategies=strategies, **raw)
     check(cfg)
     return cfg
 
@@ -86,6 +98,8 @@ def load(source: str | Path) -> Config:
 def check(cfg: Config) -> None:
     if cfg.execution not in EXECUTIONS:
         raise ConfigError(f"execution must be one of {EXECUTIONS}, not {cfg.execution!r}")
+    if cfg.follow is not None and cfg.follow not in cfg.strategies:
+        raise ConfigError(f"follow: no strategy {cfg.follow!r}")
     cash = cfg.instruments.get(cfg.cash)
     if cash is None or cash.rate is None:
         raise ConfigError(f"cash instrument {cfg.cash!r} must be listed and have a rate")
@@ -94,8 +108,6 @@ def check(cfg: Config) -> None:
             raise ConfigError(f"unknown rate {name!r}; known: {sorted(RATES)}")
     pairs = {frozenset(k) for k in FX}
     for i in cfg.instruments.values():
-        if i.fx != "converted":
-            raise ConfigError(f"instrument {i.id}: only fx = 'converted' is supported")
         tracked = cfg.instruments[i.tracks].currency if i.tracks in cfg.instruments else i.currency
         for other in (cfg.base_currency, tracked):
             if other != i.currency and frozenset((i.currency, other)) not in pairs:

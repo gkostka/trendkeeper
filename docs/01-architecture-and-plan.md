@@ -102,7 +102,7 @@ currency = "USD"
 currency = "EUR"
 tracks = "SPY"
 leverage = 2
-cost = 0.020              # measured, beyond a plain 2x model
+cost = 0.0095             # yearly, applied daily; measured with bot.calibrate
 financing = "tbill"       # the rate that cost was measured against
 fx = "converted"          # converted: EUR/USD counts once; leveraged: twice (CL2)
 
@@ -110,7 +110,7 @@ fx = "converted"          # converted: EUR/USD counts once; leveraged: twice (CL
 currency = "EUR"
 tracks = "QQQ"
 leverage = 2
-cost = 0.022
+cost = 0.0139
 financing = "tbill"
 fx = "converted"
 
@@ -405,19 +405,21 @@ Milestone 1 starts by porting the final research logic (spread over `bt.py` to `
 
 The pass marks are set now, before the next-day test runs, so the result can't be argued into a pass afterwards. The test runs 30/30/40 on the engine with `next_open`, the measured trade cost, cash at IBKR's real rate, whole shares on your planned portfolio size, and tax at your rate. It runs in EUR from 1999 and in USD from 1994.
 
-| Test | Pass mark | Research (same close, no tax) | Engine preview (next open, research costs, no tax) |
+| Test | Pass mark | Research (US funds, same close, no tax) | Milestone 1 run (UCITS in EUR, next open, from 1999, no tax) |
 | --- | --- | --- | --- |
-| Return over the full period | At least 1 point a year above SPY buy-and-hold, in the same currency | 13.4% against 10.9% | 13.2% against 10.9%: passes |
-| Worst drop | No worse than −40% | −30% | −29.8%: passes |
-| Each period: 1994–2006, 2007–2016, 2016–2026 | Return divided by worst drop above SPY's in all three | Not measured this way | Passes in all three |
-| The neighbourhood | Every mix with 20–40% in each trend slice and bonds for the rest beats SPY on return divided by worst drop in all three periods | Not run | 25 of 25 pass |
+| Return over the full period | At least 1 point a year above SPY buy-and-hold, in the same currency | 13.4% against 10.9% | 12.36% against 8.80%: passes |
+| Worst drop | No worse than −40% | −30% | −30.7%: passes |
+| Each period: 1994 (or 1999)–2006, 2007–2016, 2016–2026 | Return divided by worst drop above SPY's in all three | Not measured this way | 0.26, 0.58, 0.62 against 0.03, 0.16, 0.45: passes |
+| The neighbourhood | Every mix with 20–40% in each trend slice and bonds for the rest beats SPY on return divided by worst drop in all three periods | Not run | 25 of 25: passes |
+
+Run on 1 Oct 2026 with `python -m bot.gate bot/config.toml … next_open 1999-01-04`: IBKR cash interest on a €30,000 start, whole shares counted at the exchange quote, the 2% minimum trade, monthly rebalances at the open after the month ends, no buy larger than the cash on hand, currency conversion costs, and the cost of selling at the end. Annual returns are over calendar years. Re-run after the milestone 1 review on 1 Oct 2026; the first run (12.15% against 8.66%) rebalanced at the month's last close and let small trades borrow. Still provisional on three inputs: the trade cost is the research's 0.05% until measured, the tax rate is 0%, and the start size is a placeholder. The same gate on the research's US setup from 1994 also passes (13.18% against 10.86%). A start before the data, such as the EUR setup from 1994, is refused rather than run on flat prices.
 
 The neighbourhood test answers the overfitting worry: 30/30/40 was picked after seeing the data, so it only counts if the mixes around it pass too. That shows a plateau, not a lucky peak. Changed on 1 Oct 2026 after an engine preview: the first wording asked every neighbour to clear the return and drop marks. Mixes with more bonds earn less by design, so 6 of 25 missed the 1-point return mark and 40/40/20 fell 41.4%; that measured leverage, not overfitting. The risk-adjusted wording tests what the neighbourhood check is for. The preview also isn't the gate: that runs with measured costs, tax, whole shares and the UCITS funds in EUR.
 
 Two more results are recorded but don't decide the gate:
 
-- **Buffer around the averages** at 0%, 1% and 2%. A buffer is adopted only if it improves the result in all three periods; otherwise it stays at 0.
-- **Tax sensitivity** at 0%, 20% and 30%, so the size of the tax drag is known before your rate is settled.
+- **Buffer around the averages** at 0%, 1% and 2%. A buffer is adopted only if it improves the result in all three periods; otherwise it stays at 0. Result: 1% and 2% each raise the full-period return (12.63% and 12.96%) but worsen at least one period, so the buffer stays at 0.
+- **Tax sensitivity** at 0%, 20% and 30%, so the size of the tax drag is known before your rate is settled. Result: 10.20% against SPY's 8.02% at 20%, and 9.10% against 7.57% at 30%, both valued as if sold at the end.
 
 If it fails:
 
@@ -426,16 +428,18 @@ If it fails:
 
 ## Values to measure
 
-Every number the config can't know yet has a source and a deadline. Three are settled from IBKR's and Deutsche Börse's published terms; two get measured in milestone 1; one is yours to give.
+Every number the config can't know yet has a source and a deadline. Three are settled from IBKR's and Deutsche Börse's published terms and two by milestone 1's runs; the trade cost still needs measuring, and two are yours to give.
 
 | Value | Setting | Source or method | Status |
 | --- | --- | --- | --- |
 | Currency conversion (`fx_cost`) | 0.002% per conversion, minimum USD 2 | IBKR's manual conversion fee; automatic conversion adds about 0.03% to the rate, so convert by hand | Settled |
 | Cash interest | Benchmark rate minus 0.5%, nothing on the first USD 10,000 or equivalent, scaled down by NAV / USD 100,000 below that size | IBKR Pro's interest terms | Settled; the backtest uses it, which matters for small accounts |
 | `xetra_holidays` | 2026 and 2027 filled in | Deutsche Börse's non-trading days | Settled; add the next year each December |
-| Trade cost (`trade_cost`) | 0.05% per side until measured | IBKR's commission plus half the bid-ask spread, noted at 09:05, 09:30 and 10:00 for DBPG, LQQ and SXRM on 10 trading days | Milestone 1, before the gate runs |
-| Buffer around the averages | 0% until tested | Tested at 0%, 1% and 2% in the gate | Milestone 1 |
+| Fund costs (`cost`) | DBPG 0.94%, LQQ 1.39% a year, applied daily | `python -m bot.calibrate` on each fund's own prices: the cost that makes its model grow like the fund. The higher of two clean spans is kept (from listing, and from 2012 after DBPG's bad 2010–11 prints); repaired days are left out of the measurement | Settled in milestone 1. The research's 2.0% and 2.2% were measured on other listings and as a gap in annual return, which the daily charge compounds into a larger one |
+| Trade cost (`trade_cost`) | 0.05% per side until measured | IBKR's commission plus half the bid-ask spread, noted at 09:05, 09:30 and 10:00 for DBPG, LQQ and SXRM on 10 trading days | Milestone 1, before the gate is final |
+| Buffer around the averages | 0% | Tested at 0%, 1% and 2% in the gate | Settled: no buffer improves all three periods |
 | `tax_rate` | Unknown | Set per strategy: your country's rate on realized gains, or 0 for a strategy run in a tax wrapper | Yours, before milestone 1 ends; the gate also shows 0%, 20% and 30% |
+| Start size (`start_value`) | €30,000 placeholder | Your planned portfolio size; it sets how much cash interest IBKR pays and how much whole shares round | Yours |
 
 Sources: [IBKR currency conversion fees](https://www.interactivebrokers.com/en/pricing/commissions-spot-currencies.php), [IBKR interest rates](https://www.interactivebrokers.com/en/accounts/fees/pricing-interest-rates.php), [Xetra non-trading days](https://www.xetra.com/xetra-en/newsroom/trading-calendar/non-trading-days). Checked on Oct 1, 2026.
 
