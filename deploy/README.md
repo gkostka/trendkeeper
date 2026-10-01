@@ -32,6 +32,14 @@ sudo cp deploy/trendkeeper.env.example /etc/trendkeeper.env
 sudo chown trendkeeper: /etc/trendkeeper.env && sudo chmod 600 /etc/trendkeeper.env
 sudoedit /etc/trendkeeper.env
 
+# Backups: a folder the bot can write, best on another disk or a share (TK_BACKUP_DIR)
+sudo install -d -o trendkeeper -g trendkeeper -m 750 /mnt/backup/trendkeeper
+# For TK_BACKUP_SCP: an SSH key for the bot, authorised on the target machine, and its host key accepted once
+sudo -u trendkeeper mkdir -p -m 700 /var/lib/trendkeeper/.ssh
+sudo -u trendkeeper ssh-keygen -t ed25519 -N "" -f /var/lib/trendkeeper/.ssh/id_ed25519
+#   add /var/lib/trendkeeper/.ssh/id_ed25519.pub to ~/.ssh/authorized_keys on the target, then:
+sudo -u trendkeeper ssh -o StrictHostKeyChecking=accept-new nas true
+
 # tk, the timers, a first run
 sudo install -m 755 deploy/tk /usr/local/bin/tk
 echo 'export TK_CONFIG=/var/lib/trendkeeper/config.toml' >> ~/.bashrc
@@ -62,7 +70,7 @@ sudo git checkout <previous tag>   # to roll back; each decision records the com
 
 ## Milestone 2 gate: failure drills
 
-Run each on the device and tick it off. Two weeks of on-time summaries, plus all four, close the milestone.
+Run each on the device and tick it off. Two weeks of on-time summaries, plus all five, close the milestone.
 
 - [ ] **Power cut during a run:** `sudo systemctl start tk-daily.service`, pull the plug within a minute, power up.
       The missed run starts on its own (`Persistent=true`), `tk` shows today's status, and the decision is logged once.
@@ -71,3 +79,6 @@ Run each on the device and tick it off. Two weeks of on-time summaries, plus all
 - [ ] **Broken Slack webhook:** set a wrong TK_SLACK_WEBHOOK. The daily summary arrives by email instead, and the
       next run lists a `notify` alert.
 - [ ] **Dead device:** shut it down for a day. The healthcheck emails you before you notice.
+- [ ] **Backup and restore:** `sudo systemctl start tk-backup.service`, then
+      `TK_DATA_DIR=/mnt/backup/trendkeeper/$(date -u +%F) tk why` prints the last decision from the copy.
+      The next daily run shows no `backup` alert.

@@ -295,3 +295,21 @@ def test_trailing_measures_a_year_and_need_the_history():
     assert got["return"][1] == pytest.approx(0.1, abs=1e-3) and got["return"][10] == pytest.approx(0.1, abs=1e-3)
     assert got["drawdown"][1] == pytest.approx(0) and got["drawdown"][10] == pytest.approx(-0.2, abs=1e-3)
     assert got["sharpe"][10] > 0 and got["return"][25] is None and got["sharpe"][25] is None
+
+
+def test_tk_warns_when_the_status_is_older_than_the_last_run_due(tmp_path, capsys):
+    import os
+    from bot.cli import NY as CLI_NY
+    (tmp_path / "status.txt").write_text("Trendkeeper status\n")
+    friday_run = datetime(2026, 10, 2, 18, 30, tzinfo=CLI_NY).timestamp()
+    os.utime(tmp_path / "status.txt", (friday_run, friday_run))
+    monday_noon = datetime(2026, 10, 5, 12, 0, tzinfo=CLI_NY)   # Monday's run isn't due yet: Friday's is fine
+    assert cli.status(tmp_path, monday_noon) == 0 and "Warning" not in capsys.readouterr().out
+    tuesday = datetime(2026, 10, 6, 9, 0, tzinfo=CLI_NY)        # Monday 18:00 never wrote one
+    assert cli.status(tmp_path, tuesday) == 1 and "before the run due 2026-10-05 18:00" in capsys.readouterr().out
+
+
+def test_tk_check_flags_the_placeholder_email(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TK_DATA_DIR", str(tmp_path))
+    cli.main(["check"])
+    assert "placeholder you@example.com" in capsys.readouterr().out

@@ -8,7 +8,9 @@
 import os
 import sqlite3
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from bot import config
 
@@ -17,12 +19,33 @@ def _cfg():
     return config.load(config.path())
 
 
-def status(data_dir: Path) -> int:
+NY = ZoneInfo("America/New_York")
+RUN_HOUR = 18  # deploy/tk-daily.timer: Mon..Fri 18:00 America/New_York
+RUN_GRACE = timedelta(hours=1)
+
+
+def last_scheduled_run(now: datetime) -> datetime:
+    """The latest weekday 18:00 New York run that should have finished by `now`."""
+    run = now.astimezone(NY).replace(hour=RUN_HOUR, minute=0, second=0, microsecond=0)
+    if now < run + RUN_GRACE:
+        run -= timedelta(days=1)
+    while run.weekday() >= 5:
+        run -= timedelta(days=1)
+    return run
+
+
+def status(data_dir: Path, now: datetime | None = None) -> int:
     path = data_dir / "status.txt"
     if not path.exists():
         print(f"No status yet: the daily job hasn't run ({path} is missing).")
         return 1
     print(path.read_text(), end="")
+    written = datetime.fromtimestamp(path.stat().st_mtime, NY)
+    due = last_scheduled_run(now or datetime.now(NY))
+    if written < due:
+        print(f"\nWarning: this status was written {written:%Y-%m-%d %H:%M} New York, before the run due "
+              f"{due:%Y-%m-%d %H:%M}. Check `systemctl status tk-daily.timer` and `journalctl -u tk-daily`.")
+        return 1
     return 0
 
 
@@ -72,6 +95,8 @@ def check() -> int:
     for ch in sorted(used):
         missing = [v for v in need[ch] if not os.environ.get(v)]
         problems += [f"secret {v} is not set (needed for {ch})" for v in missing]
+    if "email" in used and (cfg.notify.email_to or "").endswith("@example.com"):
+        problems.append(f"notify.email_to is still the placeholder {cfg.notify.email_to}")
     if not os.environ.get("TK_HEALTHCHECK_DAILY"):
         problems.append("secret TK_HEALTHCHECK_DAILY is not set: a dead device would go unnoticed")
     root = config.data_dir(cfg)
