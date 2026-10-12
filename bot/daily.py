@@ -39,7 +39,6 @@ class Run:
     closes: dict[str, float] = field(default_factory=dict)
     fx: dict[str, pd.Series] = field(default_factory=dict)  # units of each report currency per base unit
     track: dict[str, dict] = field(default_factory=dict)
-    history: dict[str, pd.Series] = field(default_factory=dict)  # whole backtests, base currency  # backtest return a year in USD, by strategy and years
 
 
 def git_commit() -> str:
@@ -203,11 +202,13 @@ def since_in(run: Run, cfg, values: pd.Series) -> dict:
     return out
 
 
-def decide(run: Run, cfg, market, strategy, rules) -> dict:
+def decide(run: Run, cfg, market, strategy, rules, since=None) -> dict:
     i = market.pos(run.day)
-    before_start = market.dates[market.dates < pd.Timestamp(config.start(cfg, strategy) or run.day)]
-    start = min(before_start[-1] if len(before_start) else market.dates[0], market.dates[i - 1])
-    # Starts in cash: the held funds are bought at the first open like any trade, since nothing is owned yet.
+    since = since or config.start(cfg, strategy)
+    before_start = market.dates[market.dates < pd.Timestamp(since or run.day)]
+    start = before_start[-1] if len(before_start) else market.dates[0]
+    # Starts in cash at the close before the start, ordering every fund it holds then: they are bought at the
+    # start's open like any trade.
     values, trades, state = engine.backtest(strategy, market, rules, start=start, end=run.day + pd.Timedelta(days=1),
                                             value=config.capital(cfg, strategy), liquidate=False, invest_holds=False)
     opens = next_xetra_open(run.day, set(cfg.xetra_holidays), run.now)
@@ -224,7 +225,7 @@ def decide(run: Run, cfg, market, strategy, rules) -> dict:
     last = max((t.day for t in trades), default=None)
     return {
         "name": strategy.name,
-        "since": f"{pd.Timestamp(config.start(cfg, strategy)) if config.start(cfg, strategy) else values.index[0]:%Y-%m-%d}",
+        "since": f"{pd.Timestamp(since) if since else values.index[0]:%Y-%m-%d}",
         "from": f"{values.index[0]:%Y-%m-%d}",
         "last_change": None if last is None else {
             "day": f"{last:%Y-%m-%d}",
@@ -362,12 +363,10 @@ def overview_table(run: Run, cfg, follow) -> Table:
         todo = "held back" if run.held_back else f"{n} trade{'s' * (n != 1)}" if n else "none"
         rows.append([f["name"], _date(f["since"]), money(f["value"], cfg.base_currency),
                      *[pct(f["since_start_in"], c) for c in currencies], todo])
-    first = min((run.decisions[sid] for sid in follow), key=lambda f: f["from"])
     for k, s in cfg.strategies.items():
-        if s.benchmark and k in run.history:
-            v = run.history[k]
-            by = since_in(run, cfg, v[(v.index >= pd.Timestamp(first["from"])) & (v.index <= run.day)])
-            rows.append([s.name, _date(first["since"]), "", *[pct(by, c) for c in currencies], ""])
+        if s.benchmark and k in run.decisions:
+            f = run.decisions[k]
+            rows.append([s.name, _date(f["since"]), "", *[pct(f["since_start_in"], c) for c in currencies], ""])
     return Table(["Strategy", "Since", "Value", *currencies, "Actions"],
                  ["left", "left", "right", *["right"] * len(currencies), "left"], rows)
 
@@ -570,20 +569,20 @@ def run(cfg_file: Path | None = None, *, now: datetime | None = None, fetch=data
             r.alerts["late"] = f"run at {now.astimezone(NY):%Y-%m-%d %H:%M} New York for the {r.day:%Y-%m-%d} close"
         rules = engine.Rules.from_config(cfg)
         commit, digest = git_commit(), hashlib.sha256(cfg_file.read_bytes()).hexdigest()[:12]
-        # The whole backtest of the followed strategies and the benchmarks: their 1-25 year record, the drop stop
-        # and the benchmarks' return over each strategy's own days.
+        # The whole backtest of the followed strategies and the benchmarks: their 1-25 year record and the drop stop.
         follow = cfg.follow or (next(iter(cfg.strategies)),)
         history = {sid: engine.backtest(s, market, rules, value=config.capital(cfg, s), liquidate=False)[0]
                    for sid, s in cfg.strategies.items() if sid in follow or s.benchmark}
-        r.history = history
         usd = r.fx.get("USD") if cfg.base_currency != "USD" else None
         if cfg.base_currency == "USD" or usd is not None:
             for sid, values in history.items():
                 if usd is not None:
                     values = values * usd.reindex(values.index, method="ffill")
                 r.track[sid] = trailing(values.dropna(), r.day, px["^IRX.close"].dropna() / 100 if "^IRX.close" in px else None)
+        # The benchmarks are bought at the open the earliest followed strategy was, and measured from there.
+        first = min((config.start(cfg, cfg.strategies[sid]) for sid in follow if sid in cfg.strategies), default=None)
         for sid, strategy in cfg.strategies.items():
-            r.decisions[sid] = decide(r, cfg, market, strategy, rules)
+            r.decisions[sid] = decide(r, cfg, market, strategy, rules, first if strategy.benchmark else None)
             if sid in follow:
                 strategy_alerts(r, strategy, history[sid], r.decisions[sid])
         for sid, d in r.decisions.items():

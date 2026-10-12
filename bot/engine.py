@@ -275,11 +275,18 @@ def _cash_rate(bench: float, cash: float, nav: float, rules: Rules) -> float:
 
 
 def start_state(strategy: Strategy, market: Market, day, value: float, rules: Rules, invest_holds: bool = True) -> State:
-    """All cash, with the held funds bought at once for free (a backtest), or left in cash for the first step
-    to buy like any trade (a real portfolio starting today)."""
+    """All cash, with the held funds bought at once for free (a backtest), or left in cash with every fund
+    ordered at `day`'s close, to be bought at the next open like any trade (a real portfolio starting the day
+    after `day`)."""
     i = market.pos(day)
+
+    def order(sl):
+        frac = 1.0 if sl.rule == "hold" else market.above(sl.signal, sl.windows, sl.buffer)[i]
+        return None if invest_holds or not frac else frac
+
     state = State(day=market.dates[i], slices=tuple(
-        SliceState(fund=0.0, cash=sl.weight * value, held=1.0 if sl.rule == "hold" and invest_holds else 0.0)
+        SliceState(fund=0.0, cash=sl.weight * value, held=1.0 if sl.rule == "hold" and invest_holds else 0.0,
+                   pending=order(sl))
         for sl in strategy.slices))
     slices = list(state.slices)
     for k, sl in enumerate(strategy.slices):

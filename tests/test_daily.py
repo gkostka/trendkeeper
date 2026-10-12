@@ -355,3 +355,16 @@ tax_rate = 0.0
     assert small["since"] == "2026-09-01" and small["value"] == pytest.approx(1000, rel=0.05)
     status = (tmp_path / "status.txt").read_text()
     assert "\nSmall · €" in status and status.count("Trendkeeper · 30-09-2026") == 1
+
+
+def test_a_portfolio_and_its_benchmarks_are_bought_at_the_start_days_open(tmp_path):
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(CONFIG.read_text().replace("start = 2026-10-01", "start = 2026-09-01"))
+    daily.run(cfg_file, now=EVENING, fetch=fetch, second_close=second_close, senders=Outbox().senders,
+              pinger=lambda suffix="": None, data_root=tmp_path)
+    db = store.connect(tmp_path / "tk.db")
+    mix, spy = (store.decisions(db, s, 1)[0] for s in ("mix_30_30_40", "spy"))
+    assert mix["since"] == spy["since"] == "2026-09-01" and mix["from"] == spy["from"] == "2026-08-31"
+    eur = PX["EURUSD.close"].ffill()
+    held = PX["SPY.close"][DAY] / eur[DAY] / (PX["SPY.open"]["2026-09-01"] / eur["2026-09-01"]) - 1
+    assert spy["since_start"] == pytest.approx(held, abs=0.002)
