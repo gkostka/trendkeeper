@@ -236,7 +236,7 @@ def decide(run: Run, cfg, market, strategy, rules) -> dict:
         "drop_from_peak": values.iloc[-1] / values.max() - 1,
         "signals": [signal_view(market, sl, i) for sl in strategy.slices if sl.rule == "trend"],
         "slices": [{"fund": sl.fund, "value": s.value, "invested": s.held, "pending": s.pending, "weight": sl.weight,
-                    "holding": s.fund, "cash": s.cash, "shares": s.shares * market.scale[sl.fund][i]}
+                    "holding": s.fund, "cash": s.cash, "shares": s.shares / market.scale[sl.fund][i]}
                    for sl, s in zip(strategy.slices, state.slices)],
         "advice": advice,
         "trade_at": f"{opens:%Y-%m-%d}",

@@ -2,7 +2,7 @@ import io
 import json
 import sys
 import urllib.request
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -54,7 +54,10 @@ def fetch(cfg: Config, start: str) -> pd.DataFrame:
     """Prices from `start` on: Yahoo for funds, indexes and ^IRX; the ECB for EUR/USD and its deposit rate."""
     want = needed(cfg)
     ecb = [s for s in want if s in ECB_SERIES]
-    parts = [download(sorted(want - set(ecb)), start=start)]
+    # Yahoo's end is exclusive and read as a local date: where it is still the US day, today's close would be cut.
+    # The caller drops anything after the last US close.
+    end = (date.today() + timedelta(days=1)).isoformat()
+    parts = [download(sorted(want - set(ecb)), start=start, end=end)]
     if ecb:
         parts.append(download_ecb(ecb, start=start))
     return pd.concat(parts, axis=1, sort=True)

@@ -288,6 +288,16 @@ def test_a_new_portfolio_starts_in_cash_and_is_told_to_buy_every_fund(tmp_path):
     assert sorted(a["fund"] for a in d["advice"]) == ["DBPG.DE", "LQQ.PA", "SXRM.DE"]
 
 
+def test_the_shares_held_are_counted_at_the_exchange_price(tmp_path):
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(CONFIG.read_text().replace("start = 2026-10-01", "start = 2026-01-02"))
+    daily.run(cfg_file, now=EVENING, fetch=fetch, second_close=second_close, senders=Outbox().senders,
+              pinger=lambda suffix="": None, data_root=tmp_path)
+    d = store.decisions(store.connect(tmp_path / "tk.db"), "mix_30_30_40", 1)[0]
+    held = {s["fund"]: s["holding"] / s["shares"] for s in d["slices"] if s["fund"] in ("DBPG.DE", "LQQ.PA")}
+    assert held == {f: pytest.approx(PX[f"{f}.close"].ffill()[DAY], rel=1e-6) for f in held}
+
+
 def test_trailing_measures_a_year_and_need_the_history():
     days = pd.bdate_range("2014-01-01", "2026-09-30")
     values = pd.Series(1.1 ** ((days - days[0]).days / 365.25), index=days)
@@ -311,6 +321,7 @@ def test_tk_warns_when_the_status_is_older_than_the_last_run_due(tmp_path, capsy
 
 
 def test_tk_check_flags_the_placeholder_email(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("TK_CONFIG", raising=False)
     monkeypatch.setenv("TK_DATA_DIR", str(tmp_path))
     cli.main(["check"])
     assert "placeholder you@example.com" in capsys.readouterr().out
