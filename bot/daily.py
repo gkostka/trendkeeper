@@ -392,7 +392,7 @@ def portfolio_table(cfg, strategy, f) -> Table:
         split = "/".join(f"{sl.weight / len(sl.windows):.0%}" for _ in sl.windows) if sl.rule == "trend" else "-"
         rows.append([name_of(cfg, sl.fund), ticker(sl.fund), f"{sl.weight:.0%}", split, f"{target:.0%}",
                      f"{s['holding'] / total:.0%}", f"{s['shares']:,.2f}", money(s["holding"], ccy)])
-    cash = sum(s["cash"] for s in f["slices"])
+    cash = round(sum(s["cash"] for s in f["slices"]), 2) + 0.0  # fully invested leaves -1e-9, shown as "-0"
     rows.append(["Cash", ccy, "", "", f"{max(1 - targets, 0):.0%}", f"{cash / total:.0%}", "", money(cash, ccy)])
     rows.append(["Total", "", "", "", "", "", "", money(total, ccy)])
     return Table(["Asset", "Ticker", "Weight", f"{'/'.join(map(str, windows))}d" if windows else "Split",
