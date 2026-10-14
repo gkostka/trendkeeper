@@ -316,8 +316,8 @@ def test_tk_warns_when_the_status_is_older_than_the_last_run_due(tmp_path, capsy
     os.utime(tmp_path / "status.txt", (friday_run, friday_run))
     monday_noon = datetime(2026, 10, 5, 12, 0, tzinfo=CLI_NY)   # Monday's run isn't due yet: Friday's is fine
     assert cli.status(tmp_path, monday_noon) == 0 and "Warning" not in capsys.readouterr().out
-    tuesday = datetime(2026, 10, 6, 9, 0, tzinfo=CLI_NY)        # Monday 18:00 never wrote one
-    assert cli.status(tmp_path, tuesday) == 1 and "before the run due 2026-10-05 18:00" in capsys.readouterr().out
+    tuesday = datetime(2026, 10, 6, 9, 0, tzinfo=CLI_NY)        # Monday 17:15 never wrote one
+    assert cli.status(tmp_path, tuesday) == 1 and "before the run due 2026-10-05 17:15" in capsys.readouterr().out
 
 
 def test_tk_check_flags_the_placeholder_email(tmp_path, monkeypatch, capsys):
@@ -390,3 +390,11 @@ def test_a_fund_without_the_days_close_raises_an_alert(tmp_path):
               pinger=lambda suffix="": None, data_root=tmp_path)
     assert "DBPG.DE price is missing: no close for 2026-09-30 yet, valued at the 2026-09-29 price" in (
         tmp_path / "status.txt").read_text()
+
+
+def test_a_second_source_a_day_behind_checks_the_day_before(tmp_path):
+    run(tmp_path, second=lambda t: second_close_on(t, PREV))
+    assert not [k for k in store.open_alerts(store.connect(tmp_path / "tk.db")) if k.startswith("cross-check")]
+    run(tmp_path / "off", second=lambda t: (PREV, second_close_on(t, PREV)[1] * 1.01))
+    d = store.decisions(store.connect(tmp_path / "off" / "tk.db"), "mix_30_30_40", 1)[0]
+    assert d["held_back"] == "SPY closes disagree"

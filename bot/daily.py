@@ -127,13 +127,13 @@ def check_data(run: Run, cfg, px, market, second_close) -> None:
         except Exception as e:  # a second source that is down is a warning, not a reason to stop
             run.alerts[f"cross-check:{t}"] = f"second source unavailable ({type(e).__name__})"
             continue
-        ours = px[f"{t}.close"].get(run.day)
-        if day2 != run.day:
+        # Nasdaq can lag the close by hours: then the day before, the last one it has, is checked instead.
+        ours = px[f"{t}.close"].get(day2)
+        if day2 > run.day:
             run.alerts[f"cross-check:{t}"] = f"second source's latest close is {day2:%Y-%m-%d}, ours {run.day:%Y-%m-%d}"
-            if day2 > run.day:
-                run.held_back = f"Yahoo is behind on {t}"
-        elif abs(ours / close2 - 1) > CROSS_CHECK_TOLERANCE:
-            run.alerts[f"cross-check:{t}"] = f"{t} close {ours:.2f} on Yahoo, {close2:.2f} on Nasdaq"
+            run.held_back = f"Yahoo is behind on {t}"
+        elif ours is None or pd.isna(ours) or abs(ours / close2 - 1) > CROSS_CHECK_TOLERANCE:
+            run.alerts[f"cross-check:{t}"] = f"{t} close on {day2:%Y-%m-%d}: {ours or 0:.2f} on Yahoo, {close2:.2f} on Nasdaq"
             run.held_back = f"{t} closes disagree"
     holidays = set(cfg.xetra_holidays)
     for fund in sorted({sl.fund for s in cfg.strategies.values() for sl in s.slices} - set(signals)):

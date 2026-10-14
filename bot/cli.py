@@ -21,13 +21,13 @@ def _cfg():
 
 
 NY = ZoneInfo("America/New_York")
-RUN_HOUR = 18  # deploy/tk-daily.timer: Mon..Fri 18:00 America/New_York
+RUN_HOUR, RUN_MINUTE = 17, 15  # deploy/tk-daily.timer: Mon..Fri 17:15 America/New_York
 RUN_GRACE = timedelta(hours=1)
 
 
 def last_scheduled_run(now: datetime) -> datetime:
-    """The latest weekday 18:00 New York run that should have finished by `now`."""
-    run = now.astimezone(NY).replace(hour=RUN_HOUR, minute=0, second=0, microsecond=0)
+    """The latest weekday 17:15 New York run that should have finished by `now`."""
+    run = now.astimezone(NY).replace(hour=RUN_HOUR, minute=RUN_MINUTE, second=0, microsecond=0)
     if now < run + RUN_GRACE:
         run -= timedelta(days=1)
     while run.weekday() >= 5:
