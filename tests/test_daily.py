@@ -368,3 +368,25 @@ def test_a_portfolio_and_its_benchmarks_are_bought_at_the_start_days_open(tmp_pa
     eur = PX["EURUSD.close"].ffill()
     held = PX["SPY.close"][DAY] / eur[DAY] / (PX["SPY.open"]["2026-09-01"] / eur["2026-09-01"]) - 1
     assert spy["since_start"] == pytest.approx(held, abs=0.002)
+
+
+def test_a_benchmark_in_usd_returns_what_the_index_did_in_usd(tmp_path):
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(CONFIG.read_text().replace("start = 2026-10-01", "start = 2026-09-01")
+                        .replace('report_currencies = ["EUR", "USD", "PLN"]', 'report_currencies = ["EUR", "USD"]'))
+    daily.run(cfg_file, now=EVENING, fetch=fetch, second_close=second_close, senders=Outbox().senders,
+              pinger=lambda suffix="": None, data_root=tmp_path)
+    spy = store.decisions(store.connect(tmp_path / "tk.db"), "spy", 1)[0]
+    assert spy["since_start_in"]["USD"] == pytest.approx(PX["SPY.close"][DAY] / PX["SPY.open"]["2026-09-01"] - 1,
+                                                         abs=0.001)
+
+
+def test_a_fund_without_the_days_close_raises_an_alert(tmp_path):
+    def gap(cfg, start):
+        px = fetch(cfg, start).copy()
+        px.loc[DAY, "DBPG.DE.close"] = float("nan")
+        return px
+    daily.run(CONFIG, now=EVENING, fetch=gap, second_close=second_close, senders=Outbox().senders,
+              pinger=lambda suffix="": None, data_root=tmp_path)
+    assert "DBPG.DE price is missing: no close for 2026-09-30 yet, valued at the 2026-09-29 price" in (
+        tmp_path / "status.txt").read_text()

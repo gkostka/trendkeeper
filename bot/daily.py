@@ -135,6 +135,11 @@ def check_data(run: Run, cfg, px, market, second_close) -> None:
         elif abs(ours / close2 - 1) > CROSS_CHECK_TOLERANCE:
             run.alerts[f"cross-check:{t}"] = f"{t} close {ours:.2f} on Yahoo, {close2:.2f} on Nasdaq"
             run.held_back = f"{t} closes disagree"
+    holidays = set(cfg.xetra_holidays)
+    for fund in sorted({sl.fund for s in cfg.strategies.values() for sl in s.slices} - set(signals)):
+        last = px[f"{fund}.close"][:run.day].last_valid_index() if f"{fund}.close" in px else run.day
+        if last is not None and last < run.day and run.day.date() not in holidays:
+            run.alerts[f"missing:{fund}"] = f"no close for {run.day:%Y-%m-%d} yet, valued at the {last:%Y-%m-%d} price"
     recent = set(market.dates[market.dates <= run.day][-5:])
     for fund, days in market.repaired.items():
         if hits := sorted(d for d in days if d in recent):
@@ -190,13 +195,14 @@ def signal_view(market, sl, i) -> dict:
 
 
 def since_in(run: Run, cfg, values: pd.Series) -> dict:
-    """The return since the start measured in each report currency; None where the rate is missing."""
-    out = {}
+    """The return since the start measured in each report currency; None where the rate is missing. The first
+    value is the cash the evening before, so the other currencies start at the start day's rate, when it is spent."""
+    out, bought = {}, values.index[min(1, len(values) - 1)]
     for c in cfg.report_currencies or (cfg.base_currency,):
         growth = values.iloc[-1] / values.iloc[0]
         if c != cfg.base_currency:
             rate = run.fx.get(c)
-            r0, r1 = (rate.asof(values.index[0]), rate.asof(values.index[-1])) if rate is not None else (None, None)
+            r0, r1 = (rate.asof(bought), rate.asof(values.index[-1])) if rate is not None else (None, None)
             growth = growth * r1 / r0 if r0 and r1 and pd.notna(r0) and pd.notna(r1) else None
         out[c] = None if growth is None else growth - 1
     return out
@@ -299,6 +305,7 @@ ALERT_TITLES = {"stale": "Prices are out of date", "late": "The daily run was la
 def alert_title(key: str) -> str:
     kind, _, what = key.partition(":")
     titled = {"cross-check": f"{what} price check", "repaired": f"{what} price replaced by its model",
+              "missing": f"{what} price is missing",
               "drawdown": f"{what} has fallen past its stop level"}
     return titled.get(kind) or ALERT_TITLES.get(key, key)
 
