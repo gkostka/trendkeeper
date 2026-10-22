@@ -398,3 +398,12 @@ def test_a_second_source_a_day_behind_checks_the_day_before(tmp_path):
     run(tmp_path / "off", second=lambda t: (PREV, second_close_on(t, PREV)[1] * 1.01))
     d = store.decisions(store.connect(tmp_path / "off" / "tk.db"), "mix_30_30_40", 1)[0]
     assert d["held_back"] == "SPY closes disagree"
+
+
+def test_prices_and_rates_are_fetched_up_to_today(monkeypatch):
+    from bot import config, data
+    ends = {}
+    monkeypatch.setattr(data, "download", lambda tickers, start, end: ends.setdefault("yahoo", end) and pd.DataFrame())
+    monkeypatch.setattr(data, "download_ecb", lambda names, start, end: ends.setdefault("ecb", end) and pd.DataFrame())
+    data.fetch(config.load(CONFIG), "2026-10-01")
+    assert ends["yahoo"] == ends["ecb"] > datetime.now().date().isoformat()

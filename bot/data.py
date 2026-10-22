@@ -54,12 +54,12 @@ def fetch(cfg: Config, start: str) -> pd.DataFrame:
     """Prices from `start` on: Yahoo for funds, indexes and ^IRX; the ECB for EUR/USD and its deposit rate."""
     want = needed(cfg)
     ecb = [s for s in want if s in ECB_SERIES]
-    # Yahoo's end is exclusive and read as a local date: where it is still the US day, today's close would be cut.
+    # Both ends are exclusive, and Yahoo reads its as a local date: today's close and ECB rate would be cut.
     # The caller drops anything after the last US close.
     end = (date.today() + timedelta(days=1)).isoformat()
     parts = [download(sorted(want - set(ecb)), start=start, end=end)]
     if ecb:
-        parts.append(download_ecb(ecb, start=start))
+        parts.append(download_ecb(ecb, start=start, end=end))
     return pd.concat(parts, axis=1, sort=True)
 
 
