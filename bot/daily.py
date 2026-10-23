@@ -357,9 +357,12 @@ def subject(run: Run) -> str:
 
 
 def overview_table(run: Run, cfg, follow) -> Table:
-    """One row per followed strategy: its start, its value, its return since the start in each report currency
-    and the trades it needs; then the benchmarks over the days of the earliest start."""
+    """One row per followed strategy: its funds' tickers, its start, its value, its return since the start in each
+    report currency and the trades it needs; then the benchmarks over the days of the earliest start."""
     currencies = list(cfg.report_currencies or (cfg.base_currency,))
+
+    def tickers(sid):
+        return "/".join(dict.fromkeys(ticker(sl.fund) for sl in cfg.strategies[sid].slices))
 
     def pct(by, c):
         return f"{by[c]:+.1%}" if by.get(c) is not None else ""
@@ -368,14 +371,14 @@ def overview_table(run: Run, cfg, follow) -> Table:
     for sid in follow:
         f, n = run.decisions[sid], len(run.decisions[sid]["advice"])
         todo = "held back" if run.held_back else f"{n} trade{'s' * (n != 1)}" if n else "none"
-        rows.append([f["name"], _date(f["since"]), money(f["value"], cfg.base_currency),
+        rows.append([f["name"], tickers(sid), _date(f["since"]), money(f["value"], cfg.base_currency),
                      *[pct(f["since_start_in"], c) for c in currencies], todo])
     for k, s in cfg.strategies.items():
         if s.benchmark and k in run.decisions:
             f = run.decisions[k]
-            rows.append([s.name, _date(f["since"]), "", *[pct(f["since_start_in"], c) for c in currencies], ""])
-    return Table(["Strategy", "Since", "Value", *currencies, "Actions"],
-                 ["left", "left", "right", *["right"] * len(currencies), "left"], rows)
+            rows.append([s.name, tickers(k), _date(f["since"]), "", *[pct(f["since_start_in"], c) for c in currencies], ""])
+    return Table(["Strategy", "Tickers", "Since", "Value", *currencies, "Actions"],
+                 ["left", "left", "left", "right", *["right"] * len(currencies), "left"], rows)
 
 
 def action_table(run: Run, cfg, follow) -> Table:
