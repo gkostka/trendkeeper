@@ -202,6 +202,18 @@ def test_a_drifted_portfolio_is_advised_to_rebalance():
     assert not daily.rebalance_advice(strategy, engine.State(DAY, tuple(s)), market, i, rules)
 
 
+def test_a_sell_signal_sells_the_holding_not_the_slice_with_its_cash():
+    # A rebalance left the slice €139 of cash: the exit sells the €8,489 held, as the engine does, not €8,628.
+    from bot import config, engine
+    cfg = config.load(CONFIG)
+    strategy, market = cfg.strategies["mix_30_30_40"], engine.build_market(cfg, PX)
+    i = market.pos(DAY)
+    s = [engine.SliceState(fund=8996, cash=0, held=1.0), engine.SliceState(fund=8489, cash=139, held=1.0, pending=0.0),
+         engine.SliceState(fund=11669, cash=-139, held=1.0)]
+    advice = daily.signal_advice(strategy, engine.State(DAY, tuple(s)), market, i)
+    assert [(a["fund"], a["action"], a["amount"]) for a in advice] == [("LQQ.PA", "sell", 8489)]
+
+
 def test_rebalance_advice_matches_what_the_engine_trades():
     # The last month the engine rebalanced: the advice at the close before against its trades at the open.
     # The open moves the portfolio overnight, so amounts agree to within 1% of its value, not exactly.

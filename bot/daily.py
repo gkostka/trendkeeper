@@ -151,6 +151,17 @@ def _advice(fund, amount, quote, reason, **extra) -> dict:
             "shares": round(abs(amount) / quote, 2), "reason": reason, **extra}
 
 
+def signal_advice(strategy, state, market, i) -> list[dict]:
+    """The trades the pending signals make at the next open, estimated at today's close, as the engine makes them:
+    each slice's holding to its new share of the slice's value, cash in the slice included."""
+    out = []
+    for sl, s in zip(strategy.slices, state.slices):
+        if s.pending is not None and s.pending != s.held:
+            out.append(_advice(sl.fund, s.pending * s.value - s.fund, market.price[sl.fund][i] * market.scale[sl.fund][i],
+                               "signal", **{"from": s.held, "to": s.pending, "after": sl.weight * s.pending}))
+    return out
+
+
 def rebalance_advice(strategy, state, market, i, rules) -> list[dict]:
     """The trades the coming monthly rebalance makes, estimated at today's close, as the engine makes them: each
     slice back to its weight once the pending signal trades are done, sells first, buys no larger than the cash
@@ -220,11 +231,7 @@ def decide(run: Run, cfg, market, strategy, rules, since=None) -> dict:
     opens = next_xetra_open(run.day, set(cfg.xetra_holidays), run.now)
     advice = []
     if run.held_back is None:
-        for sl, s in zip(strategy.slices, state.slices):
-            if s.pending is not None and s.pending != s.held:
-                quote = market.price[sl.fund][i] * market.scale[sl.fund][i]
-                advice.append(_advice(sl.fund, (s.pending - s.held) * s.value, quote, "signal",
-                                      **{"from": s.held, "to": s.pending, "after": sl.weight * s.pending}))
+        advice += signal_advice(strategy, state, market, i)
         if strategy.rebalance == "monthly" and opens.month != run.day.month:
             advice += rebalance_advice(strategy, state, market, i, rules)
         advice.sort(key=lambda a: a["action"] != "sell")  # sells first, as the engine trades them
