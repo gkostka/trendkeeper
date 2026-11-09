@@ -1,6 +1,7 @@
 import io
 import json
 import sys
+import time
 import urllib.request
 from datetime import date, timedelta
 from pathlib import Path
@@ -25,12 +26,23 @@ def download(tickers, start="1990-01-01", end=None) -> pd.DataFrame:
     return pd.concat([close, open_], axis=1).sort_index(axis=1)
 
 
+def _get(url, waits=(10, 30, 60)) -> str:
+    """The body of `url`, tried again after each wait: the ECB's API now and then times out or resets."""
+    for wait in (*waits, None):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as f:
+                return f.read().decode()
+        except OSError:  # URLError, HTTPError and timeouts are all OSErrors
+            if wait is None:
+                raise
+            time.sleep(wait)
+
+
 def download_ecb(names=tuple(ECB_SERIES), start="1999-01-01", end=None) -> pd.DataFrame:
     """EUR/USD (USD per euro, ECB 14:15 CET fixing) and the ECB deposit rate in %, both daily from 1999."""
     end, out = end or date.today().isoformat(), {}
     for name in names:
-        with urllib.request.urlopen(ECB.format(ECB_SERIES[name], start), timeout=60) as f:
-            raw = pd.read_csv(io.StringIO(f.read().decode()), usecols=["TIME_PERIOD", "OBS_VALUE"])
+        raw = pd.read_csv(io.StringIO(_get(ECB.format(ECB_SERIES[name], start))), usecols=["TIME_PERIOD", "OBS_VALUE"])
         s = raw.set_index(pd.to_datetime(raw.TIME_PERIOD)).OBS_VALUE.astype(float)
         out[f"{name}.close"] = s[s.index < end]
     return pd.DataFrame(out)

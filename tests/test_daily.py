@@ -419,3 +419,29 @@ def test_prices_and_rates_are_fetched_up_to_today(monkeypatch):
     monkeypatch.setattr(data, "download_ecb", lambda names, start, end: ends.setdefault("ecb", end) and pd.DataFrame())
     data.fetch(config.load(CONFIG), "2026-10-01")
     assert ends["yahoo"] == ends["ecb"] > datetime.now().date().isoformat()
+
+
+def test_an_ecb_download_that_fails_is_tried_again(monkeypatch):
+    from bot import data
+    calls, waits = [], []
+
+    class Body:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            pass
+        def read(self):
+            return b"TIME_PERIOD,OBS_VALUE\n2026-11-06,1.08\n"
+
+    def urlopen(url, timeout):
+        calls.append(url)
+        if len(calls) < 3:
+            raise ConnectionResetError("reset by peer")
+        return Body()
+    monkeypatch.setattr(data.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(data.time, "sleep", waits.append)
+    assert data.download_ecb(["EURUSD"], start="2026-11-01", end="2026-11-07")["EURUSD.close"].tolist() == [1.08]
+    assert waits == [10, 30]
+    monkeypatch.setattr(data.urllib.request, "urlopen", lambda url, timeout: (_ for _ in ()).throw(TimeoutError()))
+    with pytest.raises(TimeoutError):
+        data.download_ecb(["EURUSD"], start="2026-11-01")
