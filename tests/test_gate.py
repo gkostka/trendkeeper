@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from bot import config, engine, gate
@@ -34,3 +35,18 @@ def test_the_real_config_passes_the_gate():
     market = engine.build_market(real, px)
     checks = gate.run(real, market, real.follow[0], "spy", engine.Rules.from_config(real), "1999-01-04")
     assert [c.passed for c in checks] == [True] * 4, checks
+
+
+def test_stress_shows_what_the_trend_filter_and_bonds_add():
+    from bot import stress
+    real = config.load(HERE.parent / "bot" / "config.toml")
+    px = load_snapshot(HERE / "data" / "prices.csv.gz", HERE / "data" / "eur.csv.gz")
+    market = engine.build_market(real, px)
+    rows = dict(stress.run(real, market, real.follow[0], "spy", engine.Rules.from_config(real), "1999-01-04"))
+    strategy = rows[real.strategies[real.follow[0]].name]
+    assert rows["always invested"]["max_dd"] < strategy["max_dd"] - 0.3
+    assert rows["held funds as cash"]["cagr"] < strategy["cagr"]
+    assert rows["after 20% tax"]["cagr"] < strategy["cagr"]
+    assert stress.crash_day(real, real.strategies[real.follow[0]]) == pytest.approx(-0.24)
+    assert stress.longest_underwater(pd.Series([1.0, 0.5, 0.9, 1.1], pd.to_datetime(
+        ["2000-01-01", "2001-01-01", "2002-01-01", "2003-01-01"]))) == pytest.approx(3 * 365 / 365.25, abs=0.01)
