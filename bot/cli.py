@@ -70,6 +70,9 @@ def why(strategy_id: str | None) -> int:
         print(f"  {sig['signal']} for {sig['fund']}: above {sig['count']:.0%} of its averages")
         for w in sig["windows"]:
             print(f"    {w['window']:>3}-day average: {w['distance']:+.2%} {'above' if w['distance'] > 0 else 'below'}")
+        if "vol_cap" in sig:
+            print(f"    volatility cap: holds {sig['vol_cap']:.0%} of that"
+                  + (", the index swings far above its usual volatility" if sig["vol_cap"] < 1 else ""))
     for s in d["slices"]:
         pending = "" if s["pending"] is None else f", moving to {s['pending']:.0%} at the next open"
         print(f"  {s['fund']}: {s['value']:,.0f} {cfg.base_currency}, invested {s['invested']:.0%}{pending}")

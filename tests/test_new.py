@@ -29,11 +29,11 @@ def test_custom_weights_must_add_up_and_names_must_be_new(tmp_path):
                "", "", "n", "", "3", "1", "y"]
     code, cfg, said = wizard(tmp_path, answers)
     assert code == 0 and "is taken" in said and "add up to 90%" in said and "1 or 2" in said
-    assert cfg.follow == ("mix_30_30_40", "bonds_heavy")  # alongside, the default
+    assert cfg.follow == ("mix_30_30_40_b2", "bonds_heavy")  # alongside, the default
     s = cfg.strategies["bonds_heavy"]
     assert [sl.weight for sl in s.slices] == [0.2, 0.2, 0.6] and s.rebalance is None
 
 
 def test_saying_no_saves_nothing(tmp_path):
     code, cfg, _ = wizard(tmp_path, ["Later", "1", "", "", "", "", "", "n"])
-    assert code == 1 and "later" not in cfg.strategies and cfg.follow == ("mix_30_30_40",)
+    assert code == 1 and "later" not in cfg.strategies and cfg.follow == ("mix_30_30_40_b2",)

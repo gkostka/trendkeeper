@@ -83,7 +83,9 @@ def records(cfg, market, strategy_id, benchmark_id, rules, start="1994-01-01") -
     strategy = cfg.strategies[strategy_id]
     out = []
     for b in (0.0, 0.01, 0.02):
-        s = replace(strategy, slices=tuple(replace(sl, buffer=b) if sl.rule == "trend" else sl for sl in strategy.slices))
+        # The volatility cap is off here, so these lines measure the buffer alone.
+        s = replace(strategy, slices=tuple(replace(sl, buffer=b, vol_window=0) if sl.rule == "trend" else sl
+                                           for sl in strategy.slices))
         v = _values(cfg, market, s, rules, full)
         out.append(f"buffer {b:.0%}: " + ", ".join(f"{risk_adjusted(v, p):.2f}" for p in periods)
                    + f" return/worst drop by period; {engine.stats(v, *full)['cagr']:.2%} a year")

@@ -51,7 +51,8 @@ class Market:
         return self._above[key]
 
     def target(self, sl) -> np.ndarray:
-        """A trend slice's invested share each day: its moving-average count, cut back in wild markets if set."""
+        """A trend slice's invested share each day: its moving-average count, cut back in wild markets if set.
+        Both are in thirds, so their product can be in ninths (2/3 x 2/3 = 4/9)."""
         frac = self.above(sl.signal, sl.windows, sl.buffer)
         return frac * self.vol_cap(sl.signal, sl.vol_window, sl.vol_scale) if sl.vol_window else frac
 

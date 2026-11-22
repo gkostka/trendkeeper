@@ -58,7 +58,7 @@ What this means in practice:
 
 - **Expect many small losing trades.** Most entries are reversed within days, each costing trading fees and usually a small loss. That's the cost of being in for the long trends, not a sign the bot is broken.
 - **Long exits are where the protection comes from.** The longest stretches out of the market were late 2000 to spring 2003 (up to 2.5 years) and 2008 to mid-2009, the two crashes the strategy mostly avoided. The next longest was Apr 2022 to early 2023.
-- **Untested idea:** a small buffer (for example, exit only 1–2% below the average) would cut the quick reversals. It hasn't been backtested yet.
+- **Buffer, adopted 22 Nov 2026:** the followed strategy exits only once the price closes 2% below an average, and enters as soon as it is above. That cuts signal trades from about 26 to 12 a year (main tab, milestone 1 gate).
 
 ## Today
 

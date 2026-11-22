@@ -176,7 +176,7 @@ def check(cfg: Config) -> None:
     for i in cfg.instruments.values():
         if i.fx not in FX_MODES:
             raise ConfigError(f"instrument {i.id}: fx must be one of {FX_MODES}, not {i.fx!r}")
-        tracked =cfg.instruments[i.tracks].currency if i.tracks in cfg.instruments else i.currency
+        tracked = cfg.instruments[i.tracks].currency if i.tracks in cfg.instruments else i.currency
         for other in (cfg.base_currency, tracked):
             if other != i.currency and frozenset((i.currency, other)) not in pairs:
                 raise ConfigError(f"instrument {i.id}: no exchange rate between {i.currency} and {other}")

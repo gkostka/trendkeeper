@@ -1,6 +1,6 @@
 # Trendkeeper config: UCITS funds at IBKR, valued in EUR. See docs/01, "Defining strategies".
 base_currency = "EUR"
-follow = "mix_30_30_40"
+follow = "mix_30_30_40_b2"
 execution = "next_open"    # signal at the US close, trade at the next Xetra/Paris open
 trade_cost = 0.0005        # per side; research value until milestone 1 measures commission + half spread
 fx_cost = 0.00002          # IBKR manual EUR/USD conversion: 0.002%...
@@ -67,9 +67,9 @@ currency = "USD"
 backfill = "VFITX"
 
 [[strategy]]
-id = "mix_30_30_40"        # never edit the rules of an id in use; add a new id instead
-name = "Mix 30/30/40"
-description = "2x S&P 500 and 2x Nasdaq-100, each held while above its 200/250/300-day averages; 40% Treasuries; rebalanced monthly."
+id = "mix_30_30_40_b2"     # followed from 22 Nov 2026; never edit the rules of an id in use, add a new id instead
+name = "Mix 30/30/40, 2% buffer"
+description = "2x S&P 500 and 2x Nasdaq-100, each held while above its 200/250/300-day averages; 40% Treasuries; rebalanced monthly; sells only 2% below an average."
 rebalance = "monthly"
 tax_rate = 0.0             # placeholder: your rate on realized gains (open question)
 
@@ -80,7 +80,63 @@ tax_rate = 0.0             # placeholder: your rate on realized gains (open ques
   signal = "SPY"
   windows = [200, 250, 300]
   buffer = 0.02             # sell only once 2% below the average; buy as soon as it is above
-  vol_window = 20           # cut the position in thirds while the last 20 days swing more than...
+
+  [[strategy.slice]]
+  weight = 0.30
+  fund = "LQQ.PA"
+  rule = "trend"
+  signal = "QQQ"
+  windows = [200, 250, 300]
+  buffer = 0.02             # sell only once 2% below the average; buy as soon as it is above
+
+  [[strategy.slice]]
+  weight = 0.40
+  fund = "SXRM.DE"
+  rule = "hold"
+
+[[strategy]]
+id = "mix_30_30_40"        # followed 1 Oct-22 Nov 2026; kept as it was, for comparison
+name = "Mix 30/30/40"
+description = "2x S&P 500 and 2x Nasdaq-100, each held while above its 200/250/300-day averages; 40% Treasuries; rebalanced monthly."
+benchmark = true           # compared in the daily summary, never traded
+rebalance = "monthly"
+tax_rate = 0.0             # placeholder: your rate on realized gains (open question)
+
+  [[strategy.slice]]
+  weight = 0.30
+  fund = "DBPG.DE"
+  rule = "trend"
+  signal = "SPY"
+  windows = [200, 250, 300]
+
+  [[strategy.slice]]
+  weight = 0.30
+  fund = "LQQ.PA"
+  rule = "trend"
+  signal = "QQQ"
+  windows = [200, 250, 300]
+
+  [[strategy.slice]]
+  weight = 0.40
+  fund = "SXRM.DE"
+  rule = "hold"
+
+[[strategy]]
+id = "mix_30_30_40_b2v"    # tracked, not traded, until it has a pass mark of its own (docs/01)
+name = "Mix 30/30/40, buffer + vol cap"
+description = "2x S&P 500 and 2x Nasdaq-100, each held while above its 200/250/300-day averages; 40% Treasuries; rebalanced monthly; sells only 2% below an average, and holds less while the index swings far above its usual volatility."
+benchmark = true           # compared in the daily summary, never traded
+rebalance = "monthly"
+tax_rate = 0.0             # placeholder: your rate on realized gains (open question)
+
+  [[strategy.slice]]
+  weight = 0.30
+  fund = "DBPG.DE"
+  rule = "trend"
+  signal = "SPY"
+  windows = [200, 250, 300]
+  buffer = 0.02             # sell only once 2% below the average; buy as soon as it is above
+  vol_window = 20           # cut the position while the last 20 days swing more than...
   vol_scale = 1.5           # ...1.5x the index's typical volatility
 
   [[strategy.slice]]
@@ -90,7 +146,7 @@ tax_rate = 0.0             # placeholder: your rate on realized gains (open ques
   signal = "QQQ"
   windows = [200, 250, 300]
   buffer = 0.02             # sell only once 2% below the average; buy as soon as it is above
-  vol_window = 20           # cut the position in thirds while the last 20 days swing more than...
+  vol_window = 20           # cut the position while the last 20 days swing more than...
   vol_scale = 1.5           # ...1.5x the index's typical volatility
 
   [[strategy.slice]]

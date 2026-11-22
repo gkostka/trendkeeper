@@ -144,6 +144,7 @@ def test_tk_prints_the_status_and_why(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("TK_CONFIG", str(CONFIG))
     assert cli.main([]) == 0 and "30-09-2026 Wednesday" in capsys.readouterr().out
     assert cli.main(["why"]) == 0 and "200-day average" in capsys.readouterr().out
+    assert cli.main(["why", "mix_30_30_40_b2v"]) == 0 and "volatility cap" in capsys.readouterr().out
 
 
 def test_tk_check_names_missing_secrets(tmp_path, monkeypatch, capsys):
@@ -342,7 +343,7 @@ def test_tk_check_flags_the_placeholder_email(tmp_path, monkeypatch, capsys):
 
 
 def test_followed_strategies_share_one_summary(tmp_path):
-    two = CONFIG.read_text().replace('follow = "mix_30_30_40"', 'follow = ["mix_30_30_40", "small"]') + """
+    two = CONFIG.read_text().replace('follow = "mix_30_30_40_b2"', 'follow = ["mix_30_30_40_b2", "small"]') + """
 [[strategy]]
 id = "small"
 name = "Small"
@@ -364,7 +365,7 @@ tax_rate = 0.0
     assert len(sent) == 1
     overview = next(b for b in sent[0]["blocks"] if b["type"] == "table")
     names = [row[0]["elements"][0]["elements"][0]["text"] for row in overview["rows"][1:]]
-    assert names == ["Mix 30/30/40", "Small", "S&P 500", "Nasdaq-100"]
+    assert names == ["Mix 30/30/40, 2% buffer", "Small", "Mix 30/30/40", "Mix 30/30/40, buffer + vol cap", "S&P 500", "Nasdaq-100"]
     small = store.decisions(store.connect(tmp_path / "tk.db"), "small", 1)[0]
     assert small["since"] == "2026-09-01" and small["value"] == pytest.approx(1000, rel=0.05)
     status = (tmp_path / "status.txt").read_text()
