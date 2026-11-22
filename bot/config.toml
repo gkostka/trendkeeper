@@ -79,6 +79,7 @@ tax_rate = 0.0             # placeholder: your rate on realized gains (open ques
   rule = "trend"
   signal = "SPY"
   windows = [200, 250, 300]
+  buffer = 0.02             # sell only once 2% below the average; buy as soon as it is above
 
   [[strategy.slice]]
   weight = 0.30
@@ -86,6 +87,7 @@ tax_rate = 0.0             # placeholder: your rate on realized gains (open ques
   rule = "trend"
   signal = "QQQ"
   windows = [200, 250, 300]
+  buffer = 0.02             # sell only once 2% below the average; buy as soon as it is above
 
   [[strategy.slice]]
   weight = 0.40
