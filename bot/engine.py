@@ -165,10 +165,14 @@ def build_market(cfg: Config, px: pd.DataFrame, start="1992-01-01") -> Market:
         if inst.tracks:
             ur, uo = series(inst.tracks)
             fin = rate(inst.financing)
+            # "converted" applies the leverage in the tracked currency, then converts: FX counts once.
+            # "leveraged" (CL2) levers the index measured in its own currency: FX counts `leverage` times.
+            if inst.fx == "leveraged":
+                ur, uo = convert(ur, ccy(inst.tracks), inst.currency), convert(uo, ccy(inst.tracks), inst.currency)
             sr = inst.leverage * ur - (inst.leverage - 1) * fin - inst.cost / 252
             so = inst.leverage * uo
-            # fx = "converted": the fund applies its leverage in the tracked currency, then converts.
-            sr, so = convert(sr, ccy(inst.tracks), inst.currency), convert(so, ccy(inst.tracks), inst.currency)
+            if inst.fx == "converted":
+                sr, so = convert(sr, ccy(inst.tracks), inst.currency), convert(so, ccy(inst.tracks), inst.currency)
             bad = r.notna() & sr.notna() & ((r - sr).abs() > MAX_GAP)
             # The next day goes too: it carries the catch-up of a late US move, or the second half of a bad print.
             bad = bad | bad.shift(1, fill_value=False)

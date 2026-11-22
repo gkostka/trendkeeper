@@ -5,6 +5,7 @@ from datetime import date
 from pathlib import Path
 
 EXECUTIONS = ("same_close", "next_open", "next_close")
+FX_MODES = ("converted", "leveraged")
 RATES = {"tbill": "^IRX", "ecb_dfr": "^DFR"}
 FX = {("USD", "EUR"): "EURUSD", ("PLN", "EUR"): "EURPLN"}  # column holds units of the first currency per one of the second
 
@@ -18,6 +19,7 @@ class Instrument:
     leverage: float = 1.0
     cost: float = 0.0
     financing: str = "tbill"
+    fx: str = "converted"
     backfill: str | None = None
     rate: str | None = None
     spread: float = 0.0
@@ -170,7 +172,9 @@ def check(cfg: Config) -> None:
             raise ConfigError(f"unknown rate {name!r}; known: {sorted(RATES)}")
     pairs = {frozenset(k) for k in FX}
     for i in cfg.instruments.values():
-        tracked = cfg.instruments[i.tracks].currency if i.tracks in cfg.instruments else i.currency
+        if i.fx not in FX_MODES:
+            raise ConfigError(f"instrument {i.id}: fx must be one of {FX_MODES}, not {i.fx!r}")
+        tracked =cfg.instruments[i.tracks].currency if i.tracks in cfg.instruments else i.currency
         for other in (cfg.base_currency, tracked):
             if other != i.currency and frozenset((i.currency, other)) not in pairs:
                 raise ConfigError(f"instrument {i.id}: no exchange rate between {i.currency} and {other}")

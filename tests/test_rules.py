@@ -198,3 +198,22 @@ def test_calibrated_cost_makes_the_model_grow_like_the_fund():
     px = load_snapshot(HERE / "data" / "prices.csv.gz")
     cost = measured_cost(cfg, px, "SSO")
     assert cost == pytest.approx(0.0156, abs=5e-4)
+
+
+def test_a_fund_leveraged_in_its_own_currency_counts_fx_twice():
+    from bot.config import load
+    extra = "".join(f'\n[instrument.{k}]\ncurrency = "EUR"\ntracks = "SPY"\nleverage = 2\nfx = "{k}"\n'
+                    for k in ("converted", "leveraged"))
+    extra += ('\n[[strategy]]\nid = "probe"\nname = "probe"\ntax_rate = 0.0\n'
+              '  [[strategy.slice]]\n  weight = 0.5\n  fund = "converted"\n  rule = "hold"\n'
+              '  [[strategy.slice]]\n  weight = 0.5\n  fund = "leveraged"\n  rule = "hold"\n')
+    cfg = config.loads((HERE.parent / "bot" / "config.toml").read_text() + extra)
+    px = load_snapshot(HERE / "data" / "prices.csv.gz", HERE / "data" / "eur.csv.gz")
+    market = engine.build_market(cfg, px)
+    usd = 1 / px["EURUSD.close"].ffill().reindex(market.dates)
+    fx_move = (usd / usd.shift(1) - 1).to_numpy()[1:]
+    # (2u + 2x + 2ux - f) - ((1 + 2u - f)(1 + x) - 1) = x(1 + f): one more FX move, and f is under 0.03% a day
+    diff = (market.close_r["leveraged"] - market.close_r["converted"])[1:]
+    has_rate = ~pd.isna(fx_move)
+    assert abs(diff - fx_move)[has_rate].max() < 1e-5
+    assert abs(fx_move[has_rate]).max() > 0.01
