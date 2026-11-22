@@ -201,8 +201,11 @@ def signal_view(market, sl, i) -> dict:
     for w in sl.windows:
         ma = lv.rolling(w).mean().iloc[i]
         windows.append({"window": w, "distance": float(lv.iloc[i] / ma - 1)})
-    return {"signal": sl.signal, "fund": sl.fund, "count": float(market.above(sl.signal, sl.windows, sl.buffer)[i]),
+    view = {"signal": sl.signal, "fund": sl.fund, "count": float(market.above(sl.signal, sl.windows, sl.buffer)[i]),
             "windows": windows}
+    if sl.vol_window:
+        view["vol_cap"] = float(market.vol_cap(sl.signal, sl.vol_window, sl.vol_scale)[i])
+    return view
 
 
 def since_in(run: Run, cfg, values: pd.Series) -> dict:
@@ -430,13 +433,15 @@ def market_table(cfg, decisions) -> Table:
     """Each signal: its trend against each average (▲ above, ▼ below) and the distance from it."""
     seen = signals_of(decisions)
     windows = sorted({w["window"] for g in seen.values() for w in g["windows"]})
+    capped = any("vol_cap" in g for g in seen.values())
     rows = []
     for sig, g in seen.items():
         dist = {w["window"]: w["distance"] for w in g["windows"]}
+        cap = [f"{g['vol_cap']:.0%}" if "vol_cap" in g else ""] if capped else []
         rows.append([name_of(cfg, sig).split(" (")[0], ticker(sig), "".join("▲" if x > 0 else "▼" for x in dist.values()),
-                     *[f"{dist[w]:+.1%}" if w in dist else "" for w in windows]])
-    return Table(["Index", "Ticker", "Trend", *[f"vs {w}d" for w in windows]],
-                 ["left", "left", "left", *["right"] * len(windows)], rows)
+                     *[f"{dist[w]:+.1%}" if w in dist else "" for w in windows], *cap])
+    return Table(["Index", "Ticker", "Trend", *[f"vs {w}d" for w in windows], *(["Vol cap"] if capped else [])],
+                 ["left", "left", "left", *["right"] * (len(windows) + capped)], rows)
 
 
 BACKTEST_TABLES = (("return", "USD yearly returns", "{:+.1%}"), ("drawdown", "USD max drawdown", "{:.1%}"),

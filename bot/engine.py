@@ -40,6 +40,21 @@ class Market:
             self._above[key] = (sum(_above(lv, w, buffer) for w in windows) / len(windows)).to_numpy()
         return self._above[key]
 
+    def vol_cap(self, signal: str, window: int, scale: float) -> np.ndarray:
+        """Share of the trend position kept, in thirds: all of it unless the signal's last `window` days swung more
+        than `scale` times its typical volatility (the median to date, so causal)."""
+        key = ("vol", signal, window, scale)
+        if key not in self._above:
+            vol = self.levels[signal].pct_change().rolling(window).std()
+            cap = (scale * vol.expanding(252).median() / vol).clip(upper=1.0).fillna(1.0)
+            self._above[key] = (np.floor(cap * 3) / 3).to_numpy()
+        return self._above[key]
+
+    def target(self, sl) -> np.ndarray:
+        """A trend slice's invested share each day: its moving-average count, cut back in wild markets if set."""
+        frac = self.above(sl.signal, sl.windows, sl.buffer)
+        return frac * self.vol_cap(sl.signal, sl.vol_window, sl.vol_scale) if sl.vol_window else frac
+
 
 @dataclass(frozen=True)
 class Rules:
@@ -285,7 +300,7 @@ def start_state(strategy: Strategy, market: Market, day, value: float, rules: Ru
     i = market.pos(day)
 
     def order(sl):
-        frac = 1.0 if sl.rule == "hold" else market.above(sl.signal, sl.windows, sl.buffer)[i]
+        frac = 1.0 if sl.rule == "hold" else market.target(sl)[i]
         return None if invest_holds or not frac else frac
 
     state = State(day=market.dates[i], slices=tuple(
@@ -369,7 +384,7 @@ def step(strategy: Strategy, state: State, market: Market, day, rules: Rules):
 
     for k, sl in enumerate(strategy.slices):
         s = slices[k]
-        frac = market.above(sl.signal, sl.windows, sl.buffer)[i] if sl.rule == "trend" else 1.0
+        frac = market.target(sl)[i] if sl.rule == "trend" else 1.0
         if frac != (s.held if s.pending is None else s.pending):
             if rules.execution == "same_close":
                 trade(k, frac * s.value - s.fund, close_price(k), i, day, "close", "signal")

@@ -35,6 +35,8 @@ class Slice:
     signal: str | None = None
     windows: tuple[int, ...] = ()
     buffer: float = 0.0
+    vol_window: int = 0
+    vol_scale: float = 1.5
 
 
 @dataclass(frozen=True)
@@ -194,5 +196,7 @@ def check(cfg: Config) -> None:
                     raise ConfigError(f"strategy {s.id}: trend slice on {sl.fund} needs a signal instrument and windows")
                 if not 0 <= sl.buffer < 0.2:
                     raise ConfigError(f"strategy {s.id}: buffer must be between 0 and 0.2")
+                if sl.vol_window and (sl.vol_window < 2 or sl.vol_scale <= 0):
+                    raise ConfigError(f"strategy {s.id}: vol_window must be 0 (off) or at least 2, with vol_scale above 0")
             elif sl.rule != "hold":
                 raise ConfigError(f"strategy {s.id}: rule must be 'hold' or 'trend', not {sl.rule!r}")

@@ -217,3 +217,27 @@ def test_a_fund_leveraged_in_its_own_currency_counts_fx_twice():
     has_rate = ~pd.isna(fx_move)
     assert abs(diff - fx_move)[has_rate].max() < 1e-5
     assert abs(fx_move[has_rate]).max() > 0.01
+
+
+def test_vol_cap_cuts_the_position_in_wild_markets_only(eur):
+    cfg, px, market = eur
+    sl = replace(cfg.strategies["mix_30_30_40"].slices[0], vol_window=20, vol_scale=1.5)
+    cap = pd.Series(market.vol_cap(sl.signal, 20, 1.5), market.dates)
+    assert set(cap.unique()) <= {0.0, 1 / 3, 2 / 3, 1.0}
+    assert cap["2020-03-16"] < 1 and cap["2017-01-02":"2017-12-29"].min() == 1
+    assert (market.target(sl) <= market.above(sl.signal, sl.windows, sl.buffer)).all()
+
+
+def test_vol_cap_has_no_look_ahead(eur):
+    cfg, px, market = eur
+    sl = replace(cfg.strategies["mix_30_30_40"].slices[1], vol_window=20, vol_scale=1.5)
+    cut = pd.Timestamp("2018-12-31")
+    part = engine.build_market(cfg, px[px.index <= cut])
+    n = len(part.dates)
+    assert (market.target(sl)[:n] == part.target(sl)).all()
+
+
+def test_config_rejects_a_bad_vol_window():
+    text = (HERE.parent / "bot" / "config.toml").read_text().replace("vol_window = 20", "vol_window = 1", 1)
+    with pytest.raises(config.ConfigError, match="vol_window"):
+        config.loads(text)
