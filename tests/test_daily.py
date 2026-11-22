@@ -141,6 +141,7 @@ def test_next_xetra_open_skips_weekends_and_holidays():
 def test_tk_prints_the_status_and_why(tmp_path, monkeypatch, capsys):
     run(tmp_path)
     monkeypatch.setenv("TK_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TK_CONFIG", str(CONFIG))
     assert cli.main([]) == 0 and "30-09-2026 Wednesday" in capsys.readouterr().out
     assert cli.main(["why"]) == 0 and "200-day average" in capsys.readouterr().out
 
@@ -254,6 +255,7 @@ def test_a_dividend_that_rescales_history_is_fetched_in_full(tmp_path):
 def test_tk_why_works_for_a_user_who_can_only_read(tmp_path, monkeypatch, capsys):
     run(tmp_path)
     monkeypatch.setenv("TK_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TK_CONFIG", str(CONFIG))
     files = list(tmp_path.iterdir())
     try:
         for p in files:
